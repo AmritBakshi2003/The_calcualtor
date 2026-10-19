@@ -8,10 +8,11 @@ describe('App', () => {
     expect(screen.getByText('Calculator Suite')).toBeInTheDocument();
   });
 
-  it('renders coming soon message', () => {
+  it('renders tab navigation', () => {
     render(<App />);
-    expect(
-      screen.getByText('Coming soon: Basic, Scientific, Finance, and Scan modes')
-    ).toBeInTheDocument();
+    expect(screen.getByText('Simple')).toBeInTheDocument();
+    expect(screen.getByText('Scientific')).toBeInTheDocument();
+    expect(screen.getByText('Finance')).toBeInTheDocument();
+    expect(screen.getByText('Scan')).toBeInTheDocument();
   });
 });
