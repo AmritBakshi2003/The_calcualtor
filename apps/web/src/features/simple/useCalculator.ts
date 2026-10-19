@@ -4,7 +4,7 @@ import { useCalculatorStore } from '../../store';
 import { addHistoryEntry } from '../../storage/db';
 
 export function useCalculator() {
-  const { mode, angleMode, lastAnswer, setLastAnswer } = useCalculatorStore();
+  const { mode, angleMode, lastAnswer, setLastAnswer, setAngleMode } = useCalculatorStore();
   const [expression, setExpression] = useState('');
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +124,7 @@ export function useCalculator() {
     result,
     error,
     memory,
+    angleMode,
     appendToExpression,
     clear,
     clearEntry,

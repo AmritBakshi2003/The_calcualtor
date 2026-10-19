@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { calculateTax, calculateDiscount } from '@calculator-suite/math-core';
+import { calculateTax, calculateDiscount, type TaxResult, type DiscountResult } from '@calculator-suite/math-core';
 
 export function TaxCalculator() {
   const [calculatorType, setCalculatorType] = useState<'tax' | 'discount'>('tax');
   const [amount, setAmount] = useState('');
   const [rate, setRate] = useState('');
   const [taxMode, setTaxMode] = useState<'exclusive' | 'inclusive'>('exclusive');
-  const [result, setResult] = useState<ReturnType<typeof calculateTax> | ReturnType<typeof calculateDiscount> | null>(null);
+  const [result, setResult] = useState<TaxResult | DiscountResult | null>(null);
 
   const handleCalculate = () => {
     const amt = parseFloat(amount);
@@ -18,11 +18,9 @@ export function TaxCalculator() {
     }
 
     if (calculatorType === 'tax') {
-      const taxResult = calculateTax({ amount: amt, rate: r, mode: taxMode });
-      setResult(taxResult);
+      setResult(calculateTax({ amount: amt, rate: r, mode: taxMode }));
     } else {
-      const discountResult = calculateDiscount({ originalPrice: amt, discountRate: r });
-      setResult(discountResult);
+      setResult(calculateDiscount({ originalPrice: amt, discountRate: r }));
     }
   };
 
@@ -125,7 +123,7 @@ export function TaxCalculator() {
           <div className="mt-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
             <h4 className="font-semibold text-gray-900 dark:text-white mb-3">Results</h4>
             <div className="space-y-2 text-gray-700 dark:text-gray-300">
-              {calculatorType === 'tax' ? (
+              {calculatorType === 'tax' && 'baseAmount' in result ? (
                 <>
                   <div className="flex justify-between">
                     <span>Base Amount:</span>
@@ -140,7 +138,7 @@ export function TaxCalculator() {
                     <span className="font-medium">{result.totalAmount.toFixed(2)}</span>
                   </div>
                 </>
-              ) : (
+              ) : calculatorType === 'discount' && 'discountAmount' in result ? (
                 <>
                   <div className="flex justify-between">
                     <span>Discount Amount:</span>
@@ -151,7 +149,7 @@ export function TaxCalculator() {
                     <span className="font-medium">{result.finalPrice.toFixed(2)}</span>
                   </div>
                 </>
-              )}
+              ) : null}
             </div>
           </div>
         )}

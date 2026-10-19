@@ -1,23 +1,5 @@
 import { create, all, MathNode } from 'mathjs';
 
-// Allowed functions and constants for restricted evaluation
-const ALLOWED_FUNCTIONS = [
-  'sin', 'cos', 'tan', 'asin', 'acos', 'atan',
-  'sinh', 'cosh', 'tanh',
-  'log', 'log10', 'ln', 'exp',
-  'sqrt', 'abs', 'pow',
-  'factorial',
-  'ceil', 'floor', 'round',
-  'max', 'min',
-];
-
-const ALLOWED_CONSTANTS = ['pi', 'e', 'i'];
-
-const ALLOWED_OPERATORS = [
-  '+', '-', '*', '/', '^', '%',
-  '(', ')', '[', ']', ',',
-];
-
 // Create restricted math.js instance
 const math = create(all);
 math.import(
@@ -81,16 +63,4 @@ export function parseExpression(expression: string): ParseResult {
       error: error instanceof Error ? error.message : 'Failed to parse expression',
     };
   }
-}
-
-/**
- * Validate that a parsed expression only uses allowed functions and operators
- * @param node - The parsed math node
- * @returns true if valid, false otherwise
- */
-export function validateExpression(node: MathNode): boolean {
-  // Simplified validation: just ensure parsing succeeded
-  // The parseExpression function already checks for malicious patterns
-  // We'll let math.js handle function validation during evaluation
-  return true;
 }

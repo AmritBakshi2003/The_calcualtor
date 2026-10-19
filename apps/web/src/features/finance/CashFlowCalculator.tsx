@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { calculateROI, calculateNPV, calculateIRR } from '@calculator-suite/math-core';
+import { calculateROI, calculateNPV, calculateIRR, type ROIResult, type NPVResult, type IRRResult } from '@calculator-suite/math-core';
 
 export function CashFlowCalculator() {
   const [calculatorType, setCalculatorType] = useState<'roi' | 'npv' | 'irr'>('roi');
@@ -7,7 +7,7 @@ export function CashFlowCalculator() {
   const [finalValue, setFinalValue] = useState('');
   const [discountRate, setDiscountRate] = useState('');
   const [cashFlows, setCashFlows] = useState('');
-  const [result, setResult] = useState<ReturnType<typeof calculateROI> | ReturnType<typeof calculateNPV> | ReturnType<typeof calculateIRR> | null>(null);
+  const [result, setResult] = useState<ROIResult | NPVResult | IRRResult | null>(null);
 
   const handleCalculate = () => {
     if (calculatorType === 'roi') {
@@ -19,8 +19,7 @@ export function CashFlowCalculator() {
         return;
       }
 
-      const roi = calculateROI({ initialInvestment: initial, finalValue: final });
-      setResult({ roi });
+      setResult(calculateROI({ initialInvestment: initial, finalValue: final }));
     } else if (calculatorType === 'npv') {
       const rate = parseFloat(discountRate);
       const flows = cashFlows.split(',').map((s) => parseFloat(s.trim()));
@@ -30,8 +29,7 @@ export function CashFlowCalculator() {
         return;
       }
 
-      const npv = calculateNPV({ discountRate: rate, cashFlows: flows });
-      setResult({ npv });
+      setResult(calculateNPV({ discountRate: rate, cashFlows: flows }));
     } else if (calculatorType === 'irr') {
       const flows = cashFlows.split(',').map((s) => parseFloat(s.trim()));
 
@@ -41,8 +39,7 @@ export function CashFlowCalculator() {
       }
 
       try {
-        const irr = calculateIRR(flows);
-        setResult({ irr });
+        setResult(calculateIRR(flows));
       } catch (error) {
         alert(error instanceof Error ? error.message : 'IRR calculation failed');
       }
@@ -167,19 +164,19 @@ export function CashFlowCalculator() {
           <div className="mt-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
             <h4 className="font-semibold text-gray-900 dark:text-white mb-3">Results</h4>
             <div className="text-gray-700 dark:text-gray-300">
-              {calculatorType === 'roi' && (
+              {calculatorType === 'roi' && result && 'roi' in result && (
                 <div className="flex justify-between">
                   <span>ROI:</span>
                   <span className="font-medium">{result.roi.toFixed(2)}%</span>
                 </div>
               )}
-              {calculatorType === 'npv' && (
+              {calculatorType === 'npv' && result && 'npv' in result && (
                 <div className="flex justify-between">
                   <span>NPV:</span>
                   <span className="font-medium">{result.npv.toFixed(2)}</span>
                 </div>
               )}
-              {calculatorType === 'irr' && (
+              {calculatorType === 'irr' && result && 'irr' in result && (
                 <div className="flex justify-between">
                   <span>IRR:</span>
                   <span className="font-medium">{result.irr.toFixed(2)}%</span>

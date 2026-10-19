@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { calculateLumpSum, calculateCAGR, formatNumberWithGrouping } from '@calculator-suite/math-core';
+import { calculateLumpSum, calculateCAGR, formatNumberWithGrouping, type LumpSumResult, type CAGRResult } from '@calculator-suite/math-core';
 
 export function InvestmentCalculator() {
   const [calculatorType, setCalculatorType] = useState<'lumpsum' | 'cagr'>('lumpsum');
@@ -8,7 +8,7 @@ export function InvestmentCalculator() {
   const [tenureYears, setTenureYears] = useState('');
   const [startValue, setStartValue] = useState('');
   const [endValue, setEndValue] = useState('');
-  const [result, setResult] = useState<ReturnType<typeof calculateLumpSum> | ReturnType<typeof calculateCAGR> | null>(null);
+  const [result, setResult] = useState<LumpSumResult | CAGRResult | null>(null);
   const [numberFormat, setNumberFormat] = useState<'standard' | 'indian'>('standard');
 
   const handleCalculate = () => {
@@ -22,8 +22,7 @@ export function InvestmentCalculator() {
         return;
       }
 
-      const lumpSumResult = calculateLumpSum({ principal: p, annualRate: r, tenureYears: t });
-      setResult(lumpSumResult);
+      setResult(calculateLumpSum({ principal: p, annualRate: r, tenureYears: t }));
     } else {
       const sv = parseFloat(startValue);
       const ev = parseFloat(endValue);
@@ -35,8 +34,7 @@ export function InvestmentCalculator() {
       }
 
       try {
-        const cagr = calculateCAGR({ startValue: sv, endValue: ev, tenureYears: t });
-        setResult({ cagr });
+        setResult(calculateCAGR({ startValue: sv, endValue: ev, tenureYears: t }));
       } catch (error) {
         alert(error instanceof Error ? error.message : 'Calculation error');
       }
@@ -188,7 +186,7 @@ export function InvestmentCalculator() {
           <div className="mt-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
             <h4 className="font-semibold text-gray-900 dark:text-white mb-3">Results</h4>
             <div className="space-y-2 text-gray-700 dark:text-gray-300">
-              {calculatorType === 'lumpsum' ? (
+              {calculatorType === 'lumpsum' && 'finalValue' in result ? (
                 <>
                   <div className="flex justify-between">
                     <span>Final Value:</span>
@@ -201,12 +199,12 @@ export function InvestmentCalculator() {
                     </span>
                   </div>
                 </>
-              ) : (
+              ) : calculatorType === 'cagr' && 'cagr' in result ? (
                 <div className="flex justify-between">
                   <span>CAGR:</span>
                   <span className="font-medium">{result.cagr.toFixed(2)}%</span>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
         )}

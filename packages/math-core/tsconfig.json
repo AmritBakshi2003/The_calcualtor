@@ -8,7 +8,9 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noEmit": true,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "declarationMap": true,
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -18,6 +20,5 @@
     "forceConsistentCasingInFileNames": true,
     "composite": true
   },
-  "include": ["src"],
-  "references": [{ "path": "../../tsconfig.json" }]
+  "include": ["src"]
 }

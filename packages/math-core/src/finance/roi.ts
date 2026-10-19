@@ -5,11 +5,15 @@ export interface ROIInput {
   finalValue: number;
 }
 
+export interface ROIResult {
+  roi: number;
+}
+
 /**
  * Calculate ROI (Return on Investment)
  * Formula: ROI = (Final Value - Initial Investment) / Initial Investment * 100
  */
-export function calculateROI(input: ROIInput): number {
+export function calculateROI(input: ROIInput): ROIResult {
   const initial = new Decimal(input.initialInvestment);
   const final = new Decimal(input.finalValue);
 
@@ -20,7 +24,7 @@ export function calculateROI(input: ROIInput): number {
   const profit = final.sub(initial);
   const roi = profit.div(initial).mul(100);
 
-  return roi.toNumber();
+  return { roi: roi.toNumber() };
 }
 
 export interface NPVInput {
@@ -28,11 +32,15 @@ export interface NPVInput {
   cashFlows: number[]; // cashFlows[0] is initial investment (negative), rest are inflows
 }
 
+export interface NPVResult {
+  npv: number;
+}
+
 /**
  * Calculate NPV (Net Present Value)
  * Formula: NPV = Σ (CFt / (1 + r)^t) for t = 0 to n
  */
-export function calculateNPV(input: NPVInput): number {
+export function calculateNPV(input: NPVInput): NPVResult {
   const r = new Decimal(input.discountRate).div(100);
   let npv = new Decimal(0);
 
@@ -43,13 +51,17 @@ export function calculateNPV(input: NPVInput): number {
     npv = npv.add(presentValue);
   }
 
-  return npv.toNumber();
+  return { npv: npv.toNumber() };
 }
 
 export interface IRROptions {
   maxIterations?: number;
   tolerance?: number;
   initialGuess?: number;
+}
+
+export interface IRRResult {
+  irr: number;
 }
 
 const DEFAULT_IRR_OPTIONS: IRROptions = {
@@ -62,7 +74,7 @@ const DEFAULT_IRR_OPTIONS: IRROptions = {
  * Calculate IRR (Internal Rate of Return) using Newton-Raphson method
  * Formula: Find r such that NPV(r) = 0
  */
-export function calculateIRR(cashFlows: number[], options: IRROptions = {}): number {
+export function calculateIRR(cashFlows: number[], options: IRROptions = {}): IRRResult {
   const opts = { ...DEFAULT_IRR_OPTIONS, ...options };
 
   if (cashFlows.length < 2) {
@@ -93,7 +105,7 @@ export function calculateIRR(cashFlows: number[], options: IRROptions = {}): num
 
     // Check convergence
     if (npv.abs().toNumber() < opts.tolerance!) {
-      return rate.mul(100).toNumber(); // Return as percentage
+      return { irr: rate.mul(100).toNumber() }; // Return as percentage
     }
 
     // Newton-Raphson update

@@ -25,5 +25,5 @@
     }
   },
   "include": ["src"],
-  "references": [{ "path": "../../tsconfig.json" }]
+  "references": [{ "path": "../../packages/math-core" }]
 }

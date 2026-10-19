@@ -59,7 +59,7 @@ describe('Expression Parser', () => {
     });
   });
 
-  describe('validateExpression', () => {
+  describe('expression validation', () => {
     it('should pass validation for simple arithmetic', () => {
       const result = parseExpression('2 + 3 * 4');
       expect(result.success).toBe(true);

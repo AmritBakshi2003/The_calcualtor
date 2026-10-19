@@ -10,6 +10,7 @@ export interface EMIResult {
   emi: number;
   totalPayment: number;
   totalInterest: number;
+  schedule?: AmortizationScheduleItem[];
 }
 
 export interface AmortizationScheduleItem {

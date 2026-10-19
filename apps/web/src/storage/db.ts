@@ -25,7 +25,7 @@ interface CalculatorDB extends DBSchema {
     };
   };
   settings: {
-    key: string;
+    key: 'default';
     value: Settings;
   };
 }
@@ -106,7 +106,7 @@ export async function exportHistoryToCSV(): Promise<string> {
 
 export async function saveSettings(settings: Settings): Promise<void> {
   const database = await getDB();
-  await database.put('settings', { id: 'default', ...settings });
+  await database.put('settings', settings);
 }
 
 export async function getSettings(): Promise<Settings | undefined> {

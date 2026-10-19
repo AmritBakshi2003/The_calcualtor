@@ -1,6 +1,7 @@
 // Expression parsing and evaluation
 export { parseExpression } from './expression/parser';
-export { evaluateExpression, evaluateSimple, EvaluateResult, EvaluateOptions } from './expression/evaluator';
+export { evaluateExpression, evaluateSimple } from './expression/evaluator';
+export type { EvaluateResult, EvaluateOptions } from './expression/evaluator';
 export {
   validateNumberBounds,
   validatePercentage,
@@ -11,8 +12,8 @@ export {
   validateSqrtInput,
   validateLogInput,
   validateExpressionLength,
-  ValidationResult,
 } from './expression/validator';
+export type { ValidationResult } from './expression/validator';
 
 // Scientific functions
 export {
@@ -27,8 +28,8 @@ export {
   tanh,
   degToRad,
   radToDeg,
-  AngleMode,
 } from './scientific/trig';
+export type { AngleMode } from './scientific/trig';
 export {
   PI,
   E,
@@ -45,24 +46,29 @@ export {
 export {
   calculateEMI,
   generateAmortizationSchedule,
-  EMIInput,
-  EMIResult,
-  AmortizationScheduleItem,
 } from './finance/emi';
+export type { EMIInput, EMIResult, AmortizationScheduleItem } from './finance/emi';
 export {
   calculateSimpleInterest,
   calculateCompoundInterest,
+} from './finance/interest';
+export type {
   SimpleInterestInput,
   SimpleInterestResult,
   CompoundInterestInput,
   CompoundInterestResult,
 } from './finance/interest';
-export { calculateSIP, SIPInput, SIPResult } from './finance/sip';
-export { calculateLumpSum, calculateCAGR, LumpSumInput, LumpSumResult, CAGRInput } from './finance/growth';
-export { calculateROI, calculateNPV, calculateIRR, ROIInput, NPVInput, IRROptions } from './finance/roi';
+export { calculateSIP } from './finance/sip';
+export type { SIPInput, SIPResult } from './finance/sip';
+export { calculateLumpSum, calculateCAGR } from './finance/growth';
+export type { LumpSumInput, LumpSumResult, CAGRInput, CAGRResult } from './finance/growth';
+export { calculateROI, calculateNPV, calculateIRR } from './finance/roi';
+export type { ROIInput, NPVInput, IRROptions, ROIResult, NPVResult, IRRResult } from './finance/roi';
 export {
   calculateTax,
   calculateDiscount,
+} from './finance/tax';
+export type {
   TaxInput,
   TaxResult,
   TaxMode,
@@ -79,7 +85,7 @@ export {
   formatScientific,
   shouldUseScientificNotation,
   formatNumberAuto,
-  NumberFormat,
-  RoundingMode,
 } from './formatting/number';
-export { detectUserLocale, LocaleOptions } from './formatting/locale';
+export type { NumberFormat, RoundingMode } from './formatting/number';
+export { detectUserLocale } from './formatting/locale';
+export type { LocaleOptions } from './formatting/locale';

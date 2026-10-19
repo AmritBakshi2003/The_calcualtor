@@ -1,4 +1,4 @@
-import { evaluate, MathNode } from 'mathjs';
+import { evaluate } from 'mathjs';
 import { parseExpression } from './parser';
 
 export interface EvaluateResult {
@@ -37,8 +37,6 @@ export function evaluateExpression(
   if (!parseResult.success) {
     return { success: false, error: parseResult.error };
   }
-
-  const node = parseResult.node!;
 
   // Create a restricted scope
   const scope: Record<string, any> = {

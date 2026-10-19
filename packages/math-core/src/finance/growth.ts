@@ -17,6 +17,10 @@ export interface CAGRInput {
   tenureYears: number;
 }
 
+export interface CAGRResult {
+  cagr: number;
+}
+
 /**
  * Calculate lump-sum investment growth (compound interest single payment)
  * Formula: FV = P * (1 + r)^t
@@ -41,7 +45,7 @@ export function calculateLumpSum(input: LumpSumInput): LumpSumResult {
  * Calculate CAGR (Compound Annual Growth Rate)
  * Formula: CAGR = (End Value / Start Value)^(1/t) - 1
  */
-export function calculateCAGR(input: CAGRInput): number {
+export function calculateCAGR(input: CAGRInput): CAGRResult {
   const startValue = new Decimal(input.startValue);
   const endValue = new Decimal(input.endValue);
   const t = new Decimal(input.tenureYears);
@@ -59,5 +63,5 @@ export function calculateCAGR(input: CAGRInput): number {
   const ratioToPower = ratio.pow(oneOverT);
   const cagr = ratioToPower.sub(1).mul(100);
 
-  return cagr.toNumber();
+  return { cagr: cagr.toNumber() };
 }

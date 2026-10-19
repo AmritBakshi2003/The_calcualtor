@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
@@ -32,3 +33,4 @@ export default defineConfig({
     timeout: 120000,
   },
 });
+

@@ -134,7 +134,7 @@ export function EMICalculator() {
                     </tr>
                   </thead>
                   <tbody>
-                    {result.schedule.map((item) => (
+                    {result.schedule?.map((item) => (
                       <tr key={item.month} className="border-b border-gray-200 dark:border-gray-600">
                         <td className="p-2">{item.month}</td>
                         <td className="p-2 text-right">{formatCurrency(item.principalPayment)}</td>
