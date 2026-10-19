@@ -17,7 +17,8 @@
     "react-dom": "^18.3.1",
     "@calculator-suite/math-core": "file:../../packages/math-core",
     "idb": "^8.0.0",
-    "zustand": "^4.5.0"
+    "zustand": "^4.5.0",
+    "tesseract.js": "^5.0.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

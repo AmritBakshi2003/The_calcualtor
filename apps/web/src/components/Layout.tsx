@@ -73,7 +73,7 @@ export function Layout({ children }: LayoutProps) {
         {!isOnline && (
           <div className="bg-yellow-100 dark:bg-yellow-900/30 border-b border-yellow-300 dark:border-yellow-700 px-4 py-2">
             <p className="text-sm text-yellow-800 dark:text-yellow-200 text-center">
-              ⚠️ You are offline. Some features may not be available.
+              ⚠️ You are offline. {mode === 'scan' ? 'Scanner feature requires OCR library (may be cached).' : 'Core calculators work offline.'}
             </p>
           </div>
         )}
