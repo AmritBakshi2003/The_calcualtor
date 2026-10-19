@@ -18,6 +18,7 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "composite": true,
+    "types": ["vite/client"],
     "paths": {
       "@/*": ["./src/*"],
       "@math-core/*": ["../../packages/math-core/src/*"],

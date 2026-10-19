@@ -35,7 +35,9 @@ app.use(express.urlencoded({ extended: true, limit: config.bodyLimit }));
 
 // Request logging (without sensitive data)
 app.use((req, _res, next) => {
-  console.log(`${req.method} ${req.path}`);
+  if (process.env.NODE_ENV !== 'test') {
+    console.log(`${req.method} ${req.path}`);
+  }
   next();
 });
 
@@ -55,28 +57,30 @@ app.use((req, res) => {
 // Error handling middleware
 app.use(errorHandler);
 
-// Start server
-const PORT = config.port;
-const server = app.listen(PORT, () => {
-  console.log(`API server running on port ${PORT}`);
-});
-
-// Graceful shutdown
-const shutdown = (signal: string) => {
-  console.log(`\n${signal} received. Shutting down gracefully...`);
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
+// Start server only if this file is run directly
+if (require.main === module) {
+  const PORT = config.port;
+  const server = app.listen(PORT, () => {
+    console.log(`API server running on port ${PORT}`);
   });
 
-  // Force close after 10 seconds
-  setTimeout(() => {
-    console.error('Forced shutdown after timeout');
-    process.exit(1);
-  }, 10000);
-};
+  // Graceful shutdown
+  const shutdown = (signal: string) => {
+    console.log(`\n${signal} received. Shutting down gracefully...`);
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+    // Force close after 10 seconds
+    setTimeout(() => {
+      console.error('Forced shutdown after timeout');
+      process.exit(1);
+    }, 10000);
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
 
 export { app };
