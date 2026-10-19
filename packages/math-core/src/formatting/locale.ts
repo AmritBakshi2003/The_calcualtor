@@ -17,26 +17,6 @@ const DEFAULT_LOCALE_OPTIONS: LocaleOptions = {
 };
 
 /**
- * Format a number according to locale options
- */
-export function formatLocale(
-  value: number,
-  options: Partial<LocaleOptions> = {}
-): string {
-  const opts = { ...DEFAULT_LOCALE_OPTIONS, ...options };
-
-  // Import formatCurrency from number.ts
-  const { formatCurrency } = require('./number');
-  let formatted = formatCurrency(value, opts.format, opts.decimals);
-
-  if (opts.showCurrencySymbol && opts.currencySymbol) {
-    formatted = `${opts.currencySymbol}${formatted}`;
-  }
-
-  return formatted;
-}
-
-/**
  * Detect user's locale preference (simplified)
  */
 export function detectUserLocale(): 'standard' | 'indian' {
