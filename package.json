@@ -1,0 +1,35 @@
+{
+  "name": "calculator-suite",
+  "version": "0.1.0",
+  "description": "A responsive web calculator suite with basic, scientific, financial, and scanner modes",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "npm run dev:web",
+    "dev:web": "cd apps/web && npm run dev",
+    "build": "npm run build:web",
+    "build:web": "cd apps/web && npm run build",
+    "test": "npm run test:unit",
+    "test:unit": "cd apps/web && npm run test",
+    "test:e2e": "playwright test",
+    "lint": "npm run lint:web",
+    "lint:web": "cd apps/web && npm run lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "typecheck": "npm run typecheck:web",
+    "typecheck:web": "cd apps/web && npm run typecheck"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
