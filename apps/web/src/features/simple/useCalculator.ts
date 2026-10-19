@@ -96,6 +96,7 @@ export function useCalculator() {
 
   const toggleAngleMode = useCallback(() => {
     setAngleMode(angleMode === 'deg' ? 'rad' : 'deg');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [angleMode]);
 
   // Keyboard support
