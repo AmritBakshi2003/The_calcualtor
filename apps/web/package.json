@@ -13,12 +13,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "@calculator-suite/math-core": "file:../../packages/math-core",
     "idb": "^8.0.0",
-    "zustand": "^4.5.0",
-    "tesseract.js": "^5.0.0"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tesseract.js": "^5.0.0",
+    "zustand": "^4.5.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.40.0",
