@@ -1,9 +1,10 @@
 import { useState, useCallback, useEffect } from 'react';
 import { evaluateExpression, EvaluateOptions } from '@calculator-suite/math-core';
 import { useCalculatorStore } from '../../store';
+import { addHistoryEntry } from '../../storage/db';
 
 export function useCalculator() {
-  const { angleMode, lastAnswer, setLastAnswer, setAngleMode } = useCalculatorStore();
+  const { mode, angleMode, lastAnswer, setLastAnswer } = useCalculatorStore();
   const [expression, setExpression] = useState('');
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +30,7 @@ export function useCalculator() {
     setExpression((prev) => prev.slice(0, -1));
   }, []);
 
-  const evaluate = useCallback(() => {
+  const evaluate = useCallback(async () => {
     if (!expression) return;
 
     const options: EvaluateOptions = {
@@ -41,14 +42,23 @@ export function useCalculator() {
 
     if (evalResult.success) {
       const numResult = evalResult.result as number;
-      setResult(numResult.toString());
+      const resultStr = numResult.toString();
+      setResult(resultStr);
       setLastAnswer(numResult);
       setError(null);
+
+      // Save to history
+      await addHistoryEntry({
+        mode,
+        expression,
+        result: resultStr,
+        timestamp: Date.now(),
+      });
     } else {
       setError(evalResult.error || 'Error');
       setResult(null);
     }
-  }, [expression, angleMode, lastAnswer, setLastAnswer]);
+  }, [expression, angleMode, lastAnswer, setLastAnswer, mode]);
 
   const memoryRecall = useCallback(() => {
     appendToExpression(memory.toString());
@@ -58,7 +68,7 @@ export function useCalculator() {
     setMemory(0);
   }, []);
 
-  const memoryAdd = useCallback(() => {
+  const memoryAdd = useCallback(async () => {
     if (!expression) return;
     const evalResult = evaluateExpression(expression, { angleMode });
     if (evalResult.success) {
@@ -67,7 +77,7 @@ export function useCalculator() {
     }
   }, [expression, angleMode, clearEntry]);
 
-  const memorySubtract = useCallback(() => {
+  const memorySubtract = useCallback(async () => {
     if (!expression) return;
     const evalResult = evaluateExpression(expression, { angleMode });
     if (evalResult.success) {

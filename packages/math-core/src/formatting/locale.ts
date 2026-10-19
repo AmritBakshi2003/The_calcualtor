@@ -9,13 +9,6 @@ export interface LocaleOptions {
   currencySymbol?: string;
 }
 
-const DEFAULT_LOCALE_OPTIONS: LocaleOptions = {
-  format: 'standard',
-  decimals: 2,
-  showCurrencySymbol: false,
-  currencySymbol: '$',
-};
-
 /**
  * Detect user's locale preference (simplified)
  */

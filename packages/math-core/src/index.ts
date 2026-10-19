@@ -82,4 +82,4 @@ export {
   NumberFormat,
   RoundingMode,
 } from './formatting/number';
-export { formatLocale, detectUserLocale, LocaleOptions } from './formatting/locale';
+export { detectUserLocale, LocaleOptions } from './formatting/locale';
