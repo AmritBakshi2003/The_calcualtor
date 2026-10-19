@@ -5,7 +5,7 @@ export function EMICalculator() {
   const [principal, setPrincipal] = useState('');
   const [annualRate, setAnnualRate] = useState('');
   const [tenureMonths, setTenureMonths] = useState('');
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ReturnType<typeof calculateEMI> | null>(null);
   const [showSchedule, setShowSchedule] = useState(false);
   const [numberFormat, setNumberFormat] = useState<'standard' | 'indian'>('standard');
 
@@ -134,7 +134,7 @@ export function EMICalculator() {
                     </tr>
                   </thead>
                   <tbody>
-                    {result.schedule.map((item: any) => (
+                    {result.schedule.map((item) => (
                       <tr key={item.month} className="border-b border-gray-200 dark:border-gray-600">
                         <td className="p-2">{item.month}</td>
                         <td className="p-2 text-right">{formatCurrency(item.principalPayment)}</td>

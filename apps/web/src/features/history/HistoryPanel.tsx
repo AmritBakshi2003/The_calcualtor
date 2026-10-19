@@ -31,6 +31,7 @@ export function HistoryPanel({ isOpen, onClose, onSelectEntry }: HistoryPanelPro
     } else {
       setFilteredHistory(history);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, history]);
 
   const loadHistory = async () => {

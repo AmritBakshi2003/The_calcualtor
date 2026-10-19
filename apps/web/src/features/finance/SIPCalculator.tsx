@@ -6,7 +6,7 @@ export function SIPCalculator() {
   const [annualRate, setAnnualRate] = useState('');
   const [tenureYears, setTenureYears] = useState('');
   const [beginOfMonth, setBeginOfMonth] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ReturnType<typeof calculateSIP> | null>(null);
   const [numberFormat, setNumberFormat] = useState<'standard' | 'indian'>('standard');
 
   const handleCalculate = () => {

@@ -11,7 +11,7 @@ export function InterestCalculator() {
   const [annualRate, setAnnualRate] = useState('');
   const [timeYears, setTimeYears] = useState('');
   const [compoundingFrequency, setCompoundingFrequency] = useState<'annually' | 'semiannually' | 'quarterly' | 'monthly' | 'daily'>('annually');
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ReturnType<typeof calculateSimpleInterest> | ReturnType<typeof calculateCompoundInterest> | null>(null);
   const [numberFormat, setNumberFormat] = useState<'standard' | 'indian'>('standard');
 
   const handleCalculate = () => {
@@ -120,7 +120,7 @@ export function InterestCalculator() {
               </label>
               <select
                 value={compoundingFrequency}
-                onChange={(e) => setCompoundingFrequency(e.target.value as any)}
+                onChange={(e) => setCompoundingFrequency(e.target.value as 'annually' | 'semiannually' | 'quarterly' | 'monthly' | 'daily')}
                 className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               >
                 <option value="annually">Annually</option>

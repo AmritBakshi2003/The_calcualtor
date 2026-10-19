@@ -6,7 +6,7 @@ export function TaxCalculator() {
   const [amount, setAmount] = useState('');
   const [rate, setRate] = useState('');
   const [taxMode, setTaxMode] = useState<'exclusive' | 'inclusive'>('exclusive');
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ReturnType<typeof calculateTax> | ReturnType<typeof calculateDiscount> | null>(null);
 
   const handleCalculate = () => {
     const amt = parseFloat(amount);

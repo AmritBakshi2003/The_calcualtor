@@ -7,7 +7,7 @@ export function CashFlowCalculator() {
   const [finalValue, setFinalValue] = useState('');
   const [discountRate, setDiscountRate] = useState('');
   const [cashFlows, setCashFlows] = useState('');
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ReturnType<typeof calculateROI> | ReturnType<typeof calculateNPV> | ReturnType<typeof calculateIRR> | null>(null);
 
   const handleCalculate = () => {
     if (calculatorType === 'roi') {

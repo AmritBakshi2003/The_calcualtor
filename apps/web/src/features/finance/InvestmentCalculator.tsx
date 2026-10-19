@@ -8,7 +8,7 @@ export function InvestmentCalculator() {
   const [tenureYears, setTenureYears] = useState('');
   const [startValue, setStartValue] = useState('');
   const [endValue, setEndValue] = useState('');
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ReturnType<typeof calculateLumpSum> | ReturnType<typeof calculateCAGR> | null>(null);
   const [numberFormat, setNumberFormat] = useState<'standard' | 'indian'>('standard');
 
   const handleCalculate = () => {

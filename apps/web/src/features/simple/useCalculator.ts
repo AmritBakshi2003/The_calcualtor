@@ -96,7 +96,7 @@ export function useCalculator() {
 
   const toggleAngleMode = useCallback(() => {
     setAngleMode(angleMode === 'deg' ? 'rad' : 'deg');
-  }, [angleMode, setAngleMode]);
+  }, [angleMode]);
 
   // Keyboard support
   useEffect(() => {

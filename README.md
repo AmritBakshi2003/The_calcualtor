@@ -57,7 +57,8 @@ Build outputs to `apps/web/dist`
 # Unit tests
 npm run test
 
-# E2E tests
+# E2E tests (requires dev server running)
+npm run install:e2e
 npm run test:e2e
 
 # Linting
@@ -69,19 +70,17 @@ npm run typecheck
 
 ## Deployment
 
-### Static Hosting
+The app is designed as a static site that requires no backend, database, or Docker. See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions for:
+- Static hosting (Vercel, Netlify, GitHub Pages)
+- Self-hosting (nginx, Apache, Caddy, or any static file server)
+- PWA installation instructions
 
-The app builds to a static site that can be deployed to any static hosting service:
+### PWA Installation
 
-- **Vercel**: Connect your repository and deploy
-- **Netlify**: Drag and drop the `apps/web/dist` folder
-- **GitHub Pages**: Use GitHub Actions to deploy from `dist`
-
-No backend or database is required.
-
-### Self-Hosting
-
-Build the app and serve the `apps/web/dist` folder with any static file server (nginx, Apache, Caddy, etc.).
+After deployment, the app can be installed as a PWA:
+- Chrome/Edge: Click install icon in address bar
+- Safari: Click Share → Add to Home Screen
+- Firefox: Install from site information panel
 
 ## Project Structure
 
@@ -100,6 +99,14 @@ calculator-suite/
 ├── e2e/                  # Playwright E2E tests
 └── .github/workflows/    # CI configuration
 ```
+
+## Architecture
+
+- **No Backend Required**: All calculations run in the browser
+- **Math Engine**: Reusable TypeScript module in `packages/math-core`
+- **Local Storage**: IndexedDB for history and settings
+- **OCR**: Browser-side Tesseract.js for scanner mode
+- **PWA**: Service worker for offline support
 
 ## License
 
