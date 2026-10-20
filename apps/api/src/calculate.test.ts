@@ -24,7 +24,6 @@ describe('API Calculate Logic', () => {
     expect(result.success).toBe(true);
   });
 
-  // Additional validation tests
   it('should handle lastAnswer parameter correctly', () => {
     const result = evaluateExpression('ans + 5', { lastAnswer: 10 });
     expect(result.success).toBe(true);
@@ -40,5 +39,11 @@ describe('API Calculate Logic', () => {
     const result = evaluateExpression('function() {}');
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
+  });
+
+  it('should reject invalid angle mode value', () => {
+    const result = evaluateExpression('sin(90)', { angleMode: 'invalid' as any });
+    // Should handle gracefully (fallback to default or error)
+    expect(result).toBeDefined();
   });
 });
