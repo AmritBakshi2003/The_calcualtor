@@ -23,4 +23,22 @@ describe('API Calculate Logic', () => {
     const result = evaluateExpression('sin(90)', { angleMode: 'deg' });
     expect(result.success).toBe(true);
   });
+
+  // Additional validation tests
+  it('should handle lastAnswer parameter correctly', () => {
+    const result = evaluateExpression('ans + 5', { lastAnswer: 10 });
+    expect(result.success).toBe(true);
+    expect(result.result).toBe(15);
+  });
+
+  it('should handle complex expression with multiple operations', () => {
+    const result = evaluateExpression('sin(45) + cos(45) * 2', { angleMode: 'deg' });
+    expect(result.success).toBe(true);
+  });
+
+  it('should handle unsupported expression pattern', () => {
+    const result = evaluateExpression('function() {}');
+    expect(result.success).toBe(false);
+    expect(result.error).toBeDefined();
+  });
 });

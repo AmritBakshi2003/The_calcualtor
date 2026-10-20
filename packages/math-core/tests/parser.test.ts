@@ -156,4 +156,80 @@ describe('Expression Evaluator', () => {
     expect(result.success).toBe(true);
     expect(result.result).toEqual({ re: 0, im: 1 });
   });
+
+  // Advanced Parser Tests
+  it('should parse nested parentheses', () => {
+    const result = parseExpression('((2 + 3) * (4 - 1))');
+    expect(result.success).toBe(true);
+  });
+
+  it('should parse scientific notation', () => {
+    const result = parseExpression('1.5e3 + 2.5e2');
+    expect(result.success).toBe(true);
+  });
+
+  it('should parse decimal edge cases', () => {
+    const result = parseExpression('.5 + 5.');
+    expect(result.success).toBe(true);
+  });
+
+  it('should parse negative numbers at start', () => {
+    const result = parseExpression('-5 + 3');
+    expect(result.success).toBe(true);
+  });
+
+  // Advanced Evaluator Tests
+  it('should evaluate nested parentheses', () => {
+    const result = evaluateExpression('((2 + 3) * (4 - 1))');
+    expect(result.success).toBe(true);
+    expect(result.result).toBe(15);
+  });
+
+  it('should evaluate scientific notation', () => {
+    const result = evaluateExpression('1.5e3 + 2.5e2');
+    expect(result.success).toBe(true);
+    expect(result.result).toBe(1750);
+  });
+
+  it('should evaluate decimal edge cases', () => {
+    const result = evaluateExpression('.5 + 5.');
+    expect(result.success).toBe(true);
+    expect(result.result).toBe(5.5);
+  });
+
+  it('should evaluate negative numbers at start', () => {
+    const result = evaluateExpression('-5 + 3');
+    expect(result.success).toBe(true);
+    expect(result.result).toBe(-2);
+  });
+
+  it('should handle modulo operation', () => {
+    const result = evaluateExpression('17 % 5');
+    expect(result.success).toBe(true);
+    expect(result.result).toBe(2);
+  });
+
+  it('should handle factorial function', () => {
+    const result = evaluateExpression('factorial(5)');
+    expect(result.success).toBe(true);
+    expect(result.result).toBe(120);
+  });
+
+  it('should handle logarithm base 10', () => {
+    const result = evaluateExpression('log10(1000)');
+    expect(result.success).toBe(true);
+    expect(result.result).toBe(3);
+  });
+
+  it('should handle natural logarithm', () => {
+    const result = evaluateExpression('log(e)');
+    expect(result.success).toBe(true);
+    expect(Math.abs((result.result as number) - 1)).toBeLessThan(0.0001);
+  });
+
+  it('should handle absolute value', () => {
+    const result = evaluateExpression('abs(-10)');
+    expect(result.success).toBe(true);
+    expect(result.result).toBe(10);
+  });
 });
