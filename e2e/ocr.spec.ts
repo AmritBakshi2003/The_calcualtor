@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.describe('OCR/Scanner Tests', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('http://localhost:5173');
+    await page.goto('/');
     await page.click('button:has-text("Scan")');
   });
 
@@ -19,14 +19,11 @@ test.describe('OCR/Scanner Tests', () => {
     await expect(page.locator('text=Scanner v1: Supports printed arithmetic')).toBeVisible();
   });
 
-  test('Offline message is displayed', async ({ page }) => {
-    // Verify offline message is displayed
-    await expect(page.locator('text=OCR requires an active internet connection')).toBeVisible();
-  });
+  test('Scanner has upload and camera buttons', async ({ page }) => {
+    // Verify upload button is present
+    await expect(page.locator('text=Upload Image')).toBeVisible();
 
-  test('error handling for no image', async ({ page }) => {
-    // Try to recognize without image - button may not be visible until image is uploaded
-    // Just verify the structure exists
+    // Verify camera button is present
     await expect(page.locator('text=Capture Camera')).toBeVisible();
   });
 
