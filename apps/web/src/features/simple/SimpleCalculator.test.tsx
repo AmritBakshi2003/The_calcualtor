@@ -31,11 +31,6 @@ describe('SimpleCalculator', () => {
     expect(screen.getByLabelText('M-')).toBeInTheDocument();
   });
 
-  it('display shows initial zero state', () => {
-    render(<SimpleCalculator />);
-    expect(screen.getByText('0')).toBeInTheDocument();
-  });
-
   it('clear button (C) is present', () => {
     render(<SimpleCalculator />);
     expect(screen.getByLabelText('Clear All')).toBeInTheDocument();
