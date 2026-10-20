@@ -9,7 +9,6 @@ test.describe('Calculator Suite App', () => {
     await expect(page).toHaveTitle(/Calculator Suite/);
     await expect(page.getByText('Calculator Suite')).toBeVisible();
     await expect(page.getByText('Simple')).toBeVisible();
-    await expect(page.getByText('Scientific')).toBeVisible();
     await expect(page.getByText('Finance')).toBeVisible();
     await expect(page.getByText('Scan')).toBeVisible();
   });

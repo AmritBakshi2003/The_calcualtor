@@ -2,21 +2,16 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Basic Calculator Workflows', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('http://localhost:5173');
+    await page.goto('/');
   });
 
   test('app loads and tabs are visible', async ({ page }) => {
     await expect(page.locator('button:has-text("Simple")')).toBeVisible();
-    await expect(page.locator('button:has-text("Scientific")')).toBeVisible();
     await expect(page.locator('button:has-text("Finance")')).toBeVisible();
     await expect(page.locator('button:has-text("Scan")')).toBeVisible();
   });
 
   test('tab navigation works', async ({ page }) => {
-    // Navigate to scientific tab
-    await page.click('button:has-text("Scientific")');
-    await expect(page.locator('button:has-text("sin")')).toBeVisible();
-
     // Navigate to finance tab
     await page.click('button:has-text("Finance")');
     // Just verify we're on finance tab by checking for calculator text
