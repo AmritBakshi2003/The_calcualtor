@@ -6,7 +6,7 @@ interface ScientificSectionProps {
 }
 
 export function ScientificSection({ appendToExpression }: ScientificSectionProps) {
-  const { showScientific, angleMode, setAngleMode } = useCalculatorStore();
+  const { showScientific } = useCalculatorStore();
   const [operatorSet, setOperatorSet] = useState(0);
 
   if (!showScientific) return null;
@@ -61,17 +61,19 @@ export function ScientificSection({ appendToExpression }: ScientificSectionProps
 
   return (
     <div className="mb-2 transition-all duration-300 ease-in-out">
-      <div className="grid grid-cols-5 gap-1 sm:gap-2">
-        {currentSet.map((func) => (
-          <button
-            key={func.label}
-            onClick={() => appendToExpression(func.value)}
-            className="p-2 sm:p-3 bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-xs sm:text-sm"
-            aria-label={func.label}
-          >
-            {func.label}
-          </button>
-        ))}
+      <div className="flex justify-between gap-1 sm:gap-2">
+        <div className="grid grid-cols-5 gap-1 sm:gap-2 flex-1">
+          {currentSet.map((func) => (
+            <button
+              key={func.label}
+              onClick={() => appendToExpression(func.value)}
+              className="p-2 sm:p-3 bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-xs sm:text-sm"
+              aria-label={func.label}
+            >
+              {func.label}
+            </button>
+          ))}
+        </div>
         <button
           onClick={handleSwapSet}
           className="p-2 sm:p-3 bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-xs sm:text-sm"
@@ -81,19 +83,6 @@ export function ScientificSection({ appendToExpression }: ScientificSectionProps
           <svg className="w-4 h-4 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
           </svg>
-        </button>
-      </div>
-      <div className="mt-1 sm:mt-2 flex justify-center">
-        <button
-          onClick={() => setAngleMode(angleMode === 'deg' ? 'rad' : 'deg')}
-          className={`px-3 sm:px-4 py-1 sm:py-2 rounded-lg font-medium transition-colors text-xs sm:text-sm ${
-            angleMode === 'deg'
-              ? 'bg-blue-500 text-white'
-              : 'bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-500'
-          }`}
-          aria-label="Toggle angle mode"
-        >
-          {angleMode.toUpperCase()}
         </button>
       </div>
     </div>

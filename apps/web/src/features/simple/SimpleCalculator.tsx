@@ -1,7 +1,7 @@
 import { useCalculator } from './useCalculator';
 import { useCalculatorStore } from '../../store';
 import { ScientificSection } from './ScientificSection';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 const categories = [
   'Length',
@@ -151,6 +151,13 @@ export function SimpleCalculator() {
   } = useCalculator();
 
   const { showScientific, setShowScientific, setShowHistoryPanel, angleMode, setAngleMode, showHistoryPanel } = useCalculatorStore();
+
+  // Re-evaluate when angleMode changes
+  useEffect(() => {
+    if (expression && result) {
+      evaluate();
+    }
+  }, [angleMode]);
   const [showUnitConverter, setShowUnitConverter] = useState(false);
   const [unitCategory, setUnitCategory] = useState('Length');
   const [unitFrom, setUnitFrom] = useState('m');
