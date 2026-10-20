@@ -37,9 +37,12 @@ export function ScanCalculator() {
     setError(null);
 
     try {
-      // Use Tesseract.js for OCR recognition
+      // Use Tesseract.js for OCR recognition with local assets
       const { data } = await Tesseract.recognize(capturedImage, 'eng', {
         logger: (m) => console.log(m),
+        workerPath: `${import.meta.env.BASE_URL}tesseract/worker.min.js`,
+        corePath: `${import.meta.env.BASE_URL}tesseract/`,
+        langPath: `${import.meta.env.BASE_URL}tesseract/`,
       });
 
       setRecognizedText(data.text.trim());
