@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Express } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
@@ -7,7 +7,7 @@ import { calculateRouter } from './routes/calculate.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { config } from './config.js';
 
-const app = express();
+const app: Express = express();
 
 // Security middleware
 app.use(helmet());

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { evaluateExpression } from '@calculator-suite/math-core';
 import { AppError } from '../middleware/errorHandler.js';
 
-const router = Router();
+const router: Router = Router();
 
 // Validation schema for calculate request
 const calculateSchema = z.object({
