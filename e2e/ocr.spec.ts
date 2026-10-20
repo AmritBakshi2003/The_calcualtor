@@ -38,8 +38,9 @@ test.describe('OCR/Scanner Tests', () => {
 
   test('File upload works', async ({ page }) => {
     // This test verifies the fallback file upload still works
+    // There are now 2 file inputs: one for upload button, one for camera fallback
     const fileInput = page.locator('input[type="file"]');
-    await expect(fileInput).toHaveCount(1);
+    await expect(fileInput).toHaveCount(2);
   });
 
   // Note: Full OCR accuracy tests with 20 test images are deferred
