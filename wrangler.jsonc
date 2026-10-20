@@ -1,7 +1,7 @@
 {
-  name: "the-calculator",
-  compatibility_date: "2026-10-20",
-  assets: {
-    directory: "./apps/web/dist"
+  "name": "the-calcualtor",
+  "compatibility_date": "2026-10-20",
+  "assets": {
+    "directory": "./apps/web/dist"
   }
 }
