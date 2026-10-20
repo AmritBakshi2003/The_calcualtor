@@ -2,6 +2,7 @@ import { useCalculator } from './useCalculator';
 import { useCalculatorStore } from '../../store';
 import { ScientificSection } from './ScientificSection';
 import { useState } from 'react';
+import { BackspaceIcon } from '../../components/BackspaceIcon';
 
 const categories = [
   'Length',
@@ -296,10 +297,11 @@ export function SimpleCalculator() {
           </button>
           <button
             onClick={backspace}
-            className="flex-1 p-2 sm:p-3 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 transition-colors text-xs sm:text-sm"
+            className="flex-1 p-2 sm:p-3 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 transition-colors text-xs sm:text-sm flex items-center justify-center"
             aria-label="Backspace"
+            title="Backspace"
           >
-            ✕
+            <BackspaceIcon />
           </button>
         </div>
 
