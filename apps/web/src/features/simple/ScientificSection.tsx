@@ -12,7 +12,7 @@ export function ScientificSection({ appendToExpression }: ScientificSectionProps
   if (!showScientific) return null;
 
   const operatorSets = [
-    // Set 0: Basic scientific functions
+    // Set 0: Basic trig and common functions
     [
       { label: 'sin', value: 'sin(' },
       { label: 'cos', value: 'cos(' },
@@ -25,7 +25,7 @@ export function ScientificSection({ appendToExpression }: ScientificSectionProps
       { label: 'π', value: 'pi' },
       { label: 'e', value: 'e' },
     ],
-    // Set 1: Advanced functions
+    // Set 1: Inverse trig, powers, hyperbolic
     [
       { label: 'sin⁻¹', value: 'asin(' },
       { label: 'cos⁻¹', value: 'acos(' },
@@ -38,7 +38,7 @@ export function ScientificSection({ appendToExpression }: ScientificSectionProps
       { label: 'tanh', value: 'tanh(' },
       { label: 'x²', value: '^2' },
     ],
-    // Set 2: Inverse hyperbolic
+    // Set 2: Inverse hyperbolic, exponential, logarithms
     [
       { label: 'sinh⁻¹', value: 'asinh(' },
       { label: 'cosh⁻¹', value: 'acosh(' },

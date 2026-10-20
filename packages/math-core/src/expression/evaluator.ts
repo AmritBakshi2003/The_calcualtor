@@ -46,8 +46,22 @@ export function evaluateExpression(
     ln: Math.log,
     log: Math.log10,
     sqrt: Math.sqrt,
+    cbrt: Math.cbrt,
     factorial: factorial,
     abs: Math.abs,
+    log2: (x: number) => Math.log2(x),
+    sinh: (x: number) => Math.sinh(x),
+    cosh: (x: number) => Math.cosh(x),
+    tanh: (x: number) => Math.tanh(x),
+    asinh: (x: number) => Math.asinh(x),
+    acosh: (x: number) => Math.acosh(x),
+    atanh: (x: number) => Math.atanh(x),
+    nCr: (n: number, r: number) => {
+      if (r < 0 || r > n || !Number.isInteger(r) || !Number.isInteger(n)) {
+        throw new Error('Invalid combination parameters');
+      }
+      return factorial(n) / (factorial(r) * factorial(n - r));
+    },
   };
 
   // Add last answer if provided
