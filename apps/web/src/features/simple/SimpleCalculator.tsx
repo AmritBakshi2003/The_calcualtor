@@ -321,12 +321,12 @@ export function SimpleCalculator() {
           </button>
           <button
             onClick={backspace}
-            className="flex-1 p-2 sm:p-3 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 transition-colors text-xs sm:text-sm"
+            className="flex-1 p-2 sm:p-3 bg-green-500 text-white rounded-full font-medium hover:bg-green-600 transition-colors text-xs sm:text-sm flex items-center justify-center"
             aria-label="Backspace"
             title="Backspace"
           >
-            <svg className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9-2-9-2" />
             </svg>
           </button>
         </div>
