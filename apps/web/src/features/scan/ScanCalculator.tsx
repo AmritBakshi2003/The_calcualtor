@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { evaluateExpression } from '@calculator-suite/math-core';
+import Tesseract from 'tesseract.js';
 
 export function ScanCalculator() {
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
@@ -36,16 +37,14 @@ export function ScanCalculator() {
     setError(null);
 
     try {
-      // Placeholder for OCR recognition
-      // In a full implementation, this would use Tesseract.js
-      // await Tesseract.recognize(image, 'eng');
-      
-      // Simulated recognition for demo
-      setTimeout(() => {
-        setRecognizedText('2 + 3 * 4');
-        setConfidence(85);
-        setIsProcessing(false);
-      }, 1000);
+      // Use Tesseract.js for OCR recognition
+      const { data } = await Tesseract.recognize(capturedImage, 'eng', {
+        logger: (m) => console.log(m),
+      });
+
+      setRecognizedText(data.text.trim());
+      setConfidence(data.confidence);
+      setIsProcessing(false);
     } catch (err) {
       setError('Failed to recognize text from image');
       setIsProcessing(false);
@@ -164,7 +163,7 @@ export function ScanCalculator() {
               {confidence !== null && (
                 <div className="mt-2 text-sm">
                   <span className={`font-medium ${confidence < 70 ? 'text-yellow-600 dark:text-yellow-400' : 'text-green-600 dark:text-green-400'}`}>
-                    Confidence: {confidence}%
+                    Confidence: {confidence.toFixed(2)}%
                   </span>
                   {confidence < 70 && (
                     <span className="ml-2 text-yellow-600 dark:text-yellow-400">
