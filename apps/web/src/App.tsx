@@ -1,6 +1,5 @@
 import { Layout } from './components/Layout';
 import { SimpleCalculator } from './features/simple/SimpleCalculator';
-import { ScientificCalculator } from './features/scientific/ScientificCalculator';
 import { FinanceCalculator } from './features/finance/FinanceCalculator';
 import { ScanCalculator } from './features/scan/ScanCalculator';
 import { useCalculatorStore } from './store';
@@ -12,8 +11,6 @@ function App() {
     switch (mode) {
       case 'simple':
         return <SimpleCalculator />;
-      case 'scientific':
-        return <ScientificCalculator />;
       case 'finance':
         return <FinanceCalculator />;
       case 'scan':

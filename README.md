@@ -1,22 +1,37 @@
 # Calculator Suite
 
-A responsive, accessible web calculator suite with basic, scientific, financial, and scanner modes. Built with React, TypeScript, and Vite. Works offline as a Progressive Web App (PWA).
+A responsive, accessible web calculator suite with Samsung-style workflow, unit converter, and multiple calculation modes. Built with React, TypeScript, and Vite. Works offline as a Progressive Web App (PWA).
 
 ## Features
 
-- **Basic Calculator**: Digits, operators, memory keys, parentheses, keyboard support
-- **Scientific Calculator**: Trigonometry, logarithms, powers, factorials, degree/radian modes
+### Calculator Modes
+- **Simple Calculator**: Digits, operators, parentheses, keyboard support with Samsung-style workflow
+- **Expandable Scientific Functions**: Trigonometry, logarithms, powers, factorials, degree/radian modes (toggle in-app)
 - **Financial Calculator**: EMI, amortization, compound interest, SIP, ROI, NPV, IRR, tax/GST
 - **Scanner Mode**: Camera capture and image upload with local OCR (Tesseract.js)
+
+### Samsung-Style Workflow
+- **Expandable Scientific Section**: Click √x to reveal scientific functions with smooth animation
+- **In-Place History Panel**: History slides in with basic operators (+, −, ×, ÷) available without closing
+- **Integrated Unit Converter**: 9 categories (Length, Area, Temperature, Volume, Mass, Data, Speed, Time, Tip) with in-app interface
+- **Backspace on Display**: Located in function toolbar for easy access
+- **Single Clear Button**: Only "C" for clear operations
+- **Smart Mode Switching**: Only one of scientific, unit converter, or simple mode active at a time
+
+### Additional Features
+- **Tip Calculator**: Calculate tip amount, total bill, and split per head
 - **Local History**: Persisted calculation history with search, export, and reuse
 - **Offline Support**: PWA with service worker for offline operation
 - **No Backend Required**: All calculations run in the browser
+- **Mobile Optimized**: Fully responsive design for all screen sizes
+- **Dark Mode**: Toggle between light and dark themes
 
 ## Tech Stack
 
 - **Frontend**: React 18 + TypeScript + Vite
 - **Styling**: Tailwind CSS
-- **Math**: math.js (expression parsing), decimal.js (financial calculations)
+- **State Management**: Zustand
+- **Math**: math.js (expression parsing, trig functions)
 - **Storage**: IndexedDB (via idb)
 - **OCR**: Tesseract.js (browser-side)
 - **Testing**: Vitest (unit), Playwright (E2E)
@@ -61,12 +76,29 @@ npm run test
 npm run install:e2e
 npm run test:e2e
 
-# Linting
-npm run lint
-
 # Type checking
 npm run typecheck
 ```
+
+## Usage
+
+### Simple Calculator
+1. Use the number pad and operators for basic calculations
+2. Click √x to expand scientific functions (sin, cos, tan, ln, log, sqrt, etc.)
+3. Click 📜 to open history panel with operator access
+4. Click 📏 to open unit converter
+5. Click ✕ to backspace
+
+### Unit Converter
+1. Click 📏 to open unit converter
+2. Select category (Length, Area, Temperature, Volume, Mass, Data, Speed, Time, Tip)
+3. For regular conversions: Select From and To units, enter value, press =
+4. For Tip calculator: Enter tip percentage and people count, enter bill amount, press =
+
+### Scientific Functions
+- Toggle between DEG (degrees) and RAD (radians) mode in the scientific section
+- DEG/RAD indicator only shows when scientific section is open
+- All trig functions respect the current angle mode
 
 ## Deployment
 
@@ -90,8 +122,14 @@ calculator-suite/
 │   └── web/              # React app
 │       ├── src/
 │       │   ├── features/ # Calculator modes
+│       │   │   ├── simple/     # Simple calculator with Samsung workflow
+│       │   │   ├── scientific/ # Scientific calculator (separate tab)
+│       │   │   ├── finance/    # Financial calculators
+│       │   │   ├── scan/       # Scanner with OCR
+│       │   │   ├── history/    # History panel
+│       │   │   └── unitconverter/ # Unit converter component
 │       │   ├── components/
-│       │   ├── hooks/
+│       │   ├── store/
 │       │   └── storage/
 │       └── public/
 ├── packages/
@@ -107,6 +145,7 @@ calculator-suite/
 - **Local Storage**: IndexedDB for history and settings
 - **OCR**: Browser-side Tesseract.js for scanner mode
 - **PWA**: Service worker for offline support
+- **Samsung Workflow**: In-app expandable sections instead of mode tabs
 
 ## License
 

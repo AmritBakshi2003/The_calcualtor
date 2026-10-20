@@ -11,7 +11,6 @@ describe('App', () => {
   it('renders tab navigation', () => {
     render(<App />);
     expect(screen.getByText('Simple')).toBeInTheDocument();
-    expect(screen.getByText('Scientific')).toBeInTheDocument();
     expect(screen.getByText('Finance')).toBeInTheDocument();
     expect(screen.getByText('Scan')).toBeInTheDocument();
   });

@@ -1,4 +1,4 @@
-import { evaluate } from 'mathjs';
+import { evaluate, factorial } from 'mathjs';
 import { parseExpression } from './parser';
 
 export interface EvaluateResult {
@@ -43,6 +43,11 @@ export function evaluateExpression(
     pi: Math.PI,
     e: Math.E,
     i: Math.sqrt(-1),
+    ln: Math.log,
+    log: Math.log10,
+    sqrt: Math.sqrt,
+    factorial: factorial,
+    abs: Math.abs,
   };
 
   // Add last answer if provided

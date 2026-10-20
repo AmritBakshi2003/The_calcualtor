@@ -1,8 +1,10 @@
 import { useScientific } from './useScientific';
 import { SimpleCalculator } from '../simple/SimpleCalculator';
+import { useCalculatorStore } from '../../store';
 
 export function ScientificCalculator() {
-  const { appendToExpression, angleMode, toggleAngleMode } = useScientific();
+  const { appendToExpression } = useScientific();
+  const { angleMode, setAngleMode } = useCalculatorStore();
 
   const scientificFunctions = [
     { label: 'sin', value: 'sin(' },
@@ -28,7 +30,7 @@ export function ScientificCalculator() {
           </span>
           <div className="flex gap-2">
             <button
-              onClick={toggleAngleMode}
+              onClick={() => setAngleMode('deg')}
               className={`px-3 py-1 rounded text-sm font-medium ${
                 angleMode === 'deg'
                   ? 'bg-blue-500 text-white'
@@ -39,7 +41,7 @@ export function ScientificCalculator() {
               DEG
             </button>
             <button
-              onClick={toggleAngleMode}
+              onClick={() => setAngleMode('rad')}
               className={`px-3 py-1 rounded text-sm font-medium ${
                 angleMode === 'rad'
                   ? 'bg-blue-500 text-white'

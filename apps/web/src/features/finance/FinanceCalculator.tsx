@@ -19,19 +19,19 @@ export function FinanceCalculator() {
   ];
 
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
+    <div className="max-w-4xl mx-auto px-2 sm:px-0">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-4 sm:p-6">
+        <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mb-3 sm:mb-4">
           Finance Calculator
         </h2>
 
-        <div className="mb-6">
-          <div className="flex gap-2 overflow-x-auto pb-2">
+        <div className="mb-4 sm:mb-6">
+          <div className="flex gap-1 sm:gap-2 overflow-x-auto pb-2">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors whitespace-nowrap ${
+                className={`px-3 sm:px-4 py-2 rounded-lg font-medium transition-colors whitespace-nowrap text-xs sm:text-sm ${
                   activeTab === tab.key
                     ? 'bg-blue-500 text-white'
                     : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white'

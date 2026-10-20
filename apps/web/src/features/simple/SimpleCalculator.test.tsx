@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { SimpleCalculator } from './SimpleCalculator';
 
 describe('SimpleCalculator', () => {
   it('renders calculator component', () => {
     render(<SimpleCalculator />);
-    expect(screen.getByText('MC')).toBeInTheDocument();
+    expect(screen.getByLabelText('History')).toBeInTheDocument();
   });
 
   it('renders digit buttons', () => {
@@ -23,25 +23,12 @@ describe('SimpleCalculator', () => {
     expect(screen.getByLabelText('Divide')).toBeInTheDocument();
   });
 
-  it('renders memory buttons', () => {
-    render(<SimpleCalculator />);
-    expect(screen.getByLabelText('MC')).toBeInTheDocument();
-    expect(screen.getByLabelText('MR')).toBeInTheDocument();
-    expect(screen.getByLabelText('M+')).toBeInTheDocument();
-    expect(screen.getByLabelText('M-')).toBeInTheDocument();
-  });
-
   it('clear button (C) is present', () => {
     render(<SimpleCalculator />);
     expect(screen.getByLabelText('Clear All')).toBeInTheDocument();
   });
 
-  it('clear entry button (CE) is present', () => {
-    render(<SimpleCalculator />);
-    expect(screen.getByLabelText('Clear Entry')).toBeInTheDocument();
-  });
-
-  it('backspace button is present', () => {
+  it('backspace button is present on display', () => {
     render(<SimpleCalculator />);
     expect(screen.getByLabelText('Backspace')).toBeInTheDocument();
   });
@@ -65,5 +52,12 @@ describe('SimpleCalculator', () => {
   it('toggle sign button is present', () => {
     render(<SimpleCalculator />);
     expect(screen.getByLabelText('Toggle sign')).toBeInTheDocument();
+  });
+
+  it('function toolbar buttons are present', () => {
+    render(<SimpleCalculator />);
+    expect(screen.getByLabelText('History')).toBeInTheDocument();
+    expect(screen.getByLabelText('Unit Converter')).toBeInTheDocument();
+    expect(screen.getByLabelText('Toggle Scientific')).toBeInTheDocument();
   });
 });

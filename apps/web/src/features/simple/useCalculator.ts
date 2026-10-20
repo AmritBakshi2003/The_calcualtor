@@ -4,7 +4,7 @@ import { useCalculatorStore } from '../../store';
 import { addHistoryEntry } from '../../storage/db';
 
 export function useCalculator() {
-  const { mode, angleMode, lastAnswer, setLastAnswer, setAngleMode } = useCalculatorStore();
+  const { mode, angleMode, lastAnswer, setLastAnswer } = useCalculatorStore();
   const [expression, setExpression] = useState('');
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -18,11 +18,6 @@ export function useCalculator() {
   const clear = useCallback(() => {
     setExpression('');
     setResult(null);
-    setError(null);
-  }, []);
-
-  const clearEntry = useCallback(() => {
-    setExpression('');
     setError(null);
   }, []);
 
@@ -73,18 +68,18 @@ export function useCalculator() {
     const evalResult = evaluateExpression(expression, { angleMode });
     if (evalResult.success) {
       setMemory((prev) => prev + (evalResult.result as number));
-      clearEntry();
+      setExpression('');
     }
-  }, [expression, angleMode, clearEntry]);
+  }, [expression, angleMode]);
 
   const memorySubtract = useCallback(async () => {
     if (!expression) return;
     const evalResult = evaluateExpression(expression, { angleMode });
     if (evalResult.success) {
       setMemory((prev) => prev - (evalResult.result as number));
-      clearEntry();
+      setExpression('');
     }
-  }, [expression, angleMode, clearEntry]);
+  }, [expression, angleMode]);
 
   const toggleSign = useCallback(() => {
     setExpression((prev) => {
@@ -93,11 +88,6 @@ export function useCalculator() {
       return '-' + prev;
     });
   }, []);
-
-  const toggleAngleMode = useCallback(() => {
-    setAngleMode(angleMode === 'deg' ? 'rad' : 'deg');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [angleMode]);
 
   // Keyboard support
   useEffect(() => {
@@ -128,7 +118,6 @@ export function useCalculator() {
     angleMode,
     appendToExpression,
     clear,
-    clearEntry,
     backspace,
     evaluate,
     memoryRecall,
@@ -136,6 +125,7 @@ export function useCalculator() {
     memoryAdd,
     memorySubtract,
     toggleSign,
-    toggleAngleMode,
+    setResult,
+    setError,
   };
 }
