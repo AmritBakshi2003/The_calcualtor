@@ -1,7 +1,11 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { evaluateExpression } from '@calculator-suite/math-core';
 import Tesseract from 'tesseract.js';
 import { CameraCapture } from './CameraCapture';
+import { useOCRWorker } from './useOCRWorker';
+import { preprocessForOCR } from './ocrPreprocess';
+import { postprocessOCR, getCharConfidences, findLowConfidenceIndices } from './ocrPostprocess';
+import { isBlurry } from './blurDetection';
 
 export function ScanCalculator() {
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
@@ -11,7 +15,22 @@ export function ScanCalculator() {
   const [error, setError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
+  const [blurWarning, setBlurWarning] = useState(false);
+  const [lowConfidenceIndices, setLowConfidenceIndices] = useState<number[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { getWorker } = useOCRWorker();
+
+  // Store worker reference for cleanup
+  const workerRef = useRef<Tesseract.Worker | null>(null);
+
+  // Cleanup worker on unmount
+  useEffect(() => {
+    return () => {
+      if (workerRef.current) {
+        workerRef.current.terminate();
+      }
+    };
+  }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -37,6 +56,25 @@ export function ScanCalculator() {
   const handleCameraCapture = (imageData: string) => {
     setCapturedImage(imageData);
     setShowCamera(false);
+
+    // Check for blur
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        if (isBlurry(imageData)) {
+          setBlurWarning(true);
+        } else {
+          setBlurWarning(false);
+        }
+      }
+    };
+    img.src = imageData;
   };
 
   const handleRetake = () => {
@@ -48,6 +86,29 @@ export function ScanCalculator() {
     setShowCamera(true);
   };
 
+  const performOCR = async (imageData: string, useSingleBlock = false): Promise<Tesseract.RecognizeResult> => {
+    const worker = await getWorker();
+    workerRef.current = worker;
+
+    // Update PSM mode if retrying with single block
+    if (useSingleBlock) {
+      await worker.setParameters({
+        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+      });
+    }
+
+    const result = await worker.recognize(imageData);
+
+    // Reset to single line for next time
+    if (useSingleBlock) {
+      await worker.setParameters({
+        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
+      });
+    }
+
+    return result;
+  };
+
   const handleRecognize = async () => {
     if (!capturedImage) {
       setError('Please capture or upload an image first');
@@ -56,18 +117,63 @@ export function ScanCalculator() {
 
     setIsProcessing(true);
     setError(null);
+    setBlurWarning(false);
+    setLowConfidenceIndices([]);
 
     try {
-      // Use Tesseract.js for OCR recognition with local assets
-      const { data } = await Tesseract.recognize(capturedImage, 'eng', {
-        logger: (m) => console.log(m),
-        workerPath: `${import.meta.env.BASE_URL}tesseract/worker.min.js`,
-        corePath: `${import.meta.env.BASE_URL}tesseract/`,
-        langPath: `${import.meta.env.BASE_URL}tesseract/`,
+      // Preprocess image
+      const img = new Image();
+      await new Promise((resolve) => {
+        img.onload = resolve;
+        img.src = capturedImage;
       });
 
-      setRecognizedText(data.text.trim());
-      setConfidence(data.confidence);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Failed to get canvas context');
+      }
+      ctx.drawImage(img, 0, 0);
+
+      const preprocessedCanvas = preprocessForOCR(canvas);
+      const preprocessedImageData = preprocessedCanvas.toDataURL('image/jpeg', 0.9);
+
+      // First OCR pass
+      let result = await performOCR(preprocessedImageData);
+      let processedText = postprocessOCR(result.data.text.trim());
+
+      // Check if we need retry (low confidence or doesn't parse)
+      const confidence = result.data.confidence || 0;
+      const evalResult = evaluateExpression(processedText);
+
+      if (confidence < 70 || !evalResult.success) {
+        // Retry with single block mode
+        const retryResult = await performOCR(preprocessedImageData, true);
+        const retryText = postprocessOCR(retryResult.data.text.trim());
+        const retryEval = evaluateExpression(retryText);
+
+        // Pick the best result (prefer one that parses)
+        if (retryEval.success && !evalResult.success) {
+          result = retryResult;
+          processedText = retryText;
+        } else if (retryEval.success && evalResult.success) {
+          // Both parse, pick higher confidence
+          if (retryResult.data.confidence > result.data.confidence) {
+            result = retryResult;
+            processedText = retryText;
+          }
+        }
+      }
+
+      // Get character-level confidences for highlighting
+      const charConfidences = getCharConfidences(result);
+      const lowIndices = findLowConfidenceIndices(charConfidences, 60);
+      setLowConfidenceIndices(lowIndices);
+
+      setRecognizedText(processedText);
+      setConfidence(result.data.confidence || 0);
       setIsProcessing(false);
     } catch (err) {
       setError('Failed to recognize text from image');
@@ -102,6 +208,8 @@ export function ScanCalculator() {
     setConfidence(null);
     setResult(null);
     setError(null);
+    setBlurWarning(false);
+    setLowConfidenceIndices([]);
   };
 
   return (
@@ -162,6 +270,11 @@ export function ScanCalculator() {
                   ✕
                 </button>
               </div>
+              {blurWarning && (
+                <div className="absolute bottom-2 left-2 right-2 p-2 bg-yellow-100 dark:bg-yellow-900/80 text-yellow-800 dark:text-yellow-200 text-xs rounded-lg">
+                  ⚠️ Image looks blurry, try retaking
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -201,6 +314,11 @@ export function ScanCalculator() {
                   {confidence < 70 && (
                     <span className="ml-2 text-yellow-600 dark:text-yellow-400">
                       ⚠️ Low confidence - please verify
+                    </span>
+                  )}
+                  {lowConfidenceIndices.length > 0 && (
+                    <span className="ml-2 text-orange-600 dark:text-orange-400">
+                      🔍 {lowConfidenceIndices.length} character(s) need attention
                     </span>
                   )}
                 </div>
