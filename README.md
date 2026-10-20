@@ -113,12 +113,9 @@ This project is configured for deployment to Cloudflare Workers Builds via Git i
 3. Select **Pages** → **Connect to Git**
 4. Select your GitHub repository
 5. Choose the branch (e.g., `main`)
-6. Configure build settings:
-   - **Build command**: `npm run build`
-   - **Build output directory**: `apps/web/dist`
-7. Click **Save and Deploy**
+6. Click **Save and Deploy**
 
-The build will automatically run on every push to the connected branch.
+Cloudflare will automatically build and deploy on every push to the connected branch, independent of GitHub Actions.
 
 #### Important Notes
 
@@ -142,7 +139,7 @@ GitHub Actions automatically runs tests on every PR and push:
 - Unit tests (Vitest)
 - E2E tests (Playwright)
 
-The Cloudflare Workers Build will only deploy if tests pass in the GitHub Actions workflow.
+Tests must pass before Cloudflare Workers Builds will deploy the application.
 
 ### Alternative Deployment
 
