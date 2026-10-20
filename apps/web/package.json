@@ -10,7 +10,8 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "lint": "eslint src --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "ocr:bench": "node --loader tsx scripts/ocrBenchmark.ts"
   },
   "dependencies": {
     "@calculator-suite/math-core": "file:../../packages/math-core",
@@ -35,6 +36,7 @@
     "jsdom": "^24.1.3",
     "postcss": "^8.4.0",
     "tailwindcss": "^3.4.0",
+    "tsx": "^4.7.0",
     "vite": "^5.3.0",
     "vite-plugin-pwa": "0.19.8",
     "vitest": "^1.6.0",
