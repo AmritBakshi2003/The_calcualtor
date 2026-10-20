@@ -28,12 +28,20 @@ export function useCalculator() {
   const evaluate = useCallback(async () => {
     if (!expression) return;
 
+    // Auto-close unmatched parentheses
+    let expressionToEvaluate = expression;
+    const openParens = (expressionToEvaluate.match(/\(/g) || []).length;
+    const closeParens = (expressionToEvaluate.match(/\)/g) || []).length;
+    if (openParens > closeParens) {
+      expressionToEvaluate += ')'.repeat(openParens - closeParens);
+    }
+
     const options: EvaluateOptions = {
       angleMode,
       lastAnswer: lastAnswer ?? undefined,
     };
 
-    const evalResult = evaluateExpression(expression, options);
+    const evalResult = evaluateExpression(expressionToEvaluate, options);
 
     if (evalResult.success) {
       const numResult = evalResult.result as number;
@@ -45,7 +53,7 @@ export function useCalculator() {
       // Save to history
       await addHistoryEntry({
         mode,
-        expression,
+        expression: expressionToEvaluate,
         result: resultStr,
         timestamp: Date.now(),
       });

@@ -150,7 +150,7 @@ export function SimpleCalculator() {
     setError,
   } = useCalculator();
 
-  const { showScientific, setShowScientific, setShowHistoryPanel, angleMode, showHistoryPanel } = useCalculatorStore();
+  const { showScientific, setShowScientific, setShowHistoryPanel, angleMode, setAngleMode, showHistoryPanel } = useCalculatorStore();
   const [showUnitConverter, setShowUnitConverter] = useState(false);
   const [unitCategory, setUnitCategory] = useState('Length');
   const [unitFrom, setUnitFrom] = useState('m');
@@ -221,15 +221,28 @@ export function SimpleCalculator() {
       <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-4 sm:p-6">
         {/* Display */}
         <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-gray-100 dark:bg-gray-700 rounded-lg min-h-[100px] sm:min-h-[120px] flex flex-col">
-          {(showScientific || showUnitConverter) && (
-            <div className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">
-              {showUnitConverter
-                ? unitCategory === 'Tip'
+          <div className="flex justify-between items-center mb-1 sm:mb-2">
+            {showUnitConverter && (
+              <div className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">
+                {unitCategory === 'Tip'
                   ? `Tip: ${tipPercentage}% | Split: ${tipPeople}`
-                  : `${unitCategory}: ${unitFrom} → ${unitTo}`
-                : angleMode.toUpperCase()}
-            </div>
-          )}
+                  : `${unitCategory}: ${unitFrom} → ${unitTo}`}
+              </div>
+            )}
+            {showScientific && (
+              <button
+                onClick={() => setAngleMode(angleMode === 'deg' ? 'rad' : 'deg')}
+                className={`px-2 sm:px-3 py-1 rounded font-medium transition-colors text-xs sm:text-sm ${
+                  angleMode === 'deg'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-500'
+                }`}
+                aria-label="Toggle angle mode"
+              >
+                {angleMode.toUpperCase()}
+              </button>
+            )}
+          </div>
           <div className="flex-1 flex flex-col justify-end items-end">
             {expression && (
               <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-400 mb-1 sm:mb-2" aria-live="polite">
@@ -269,8 +282,11 @@ export function SimpleCalculator() {
                 : 'bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-500'
             }`}
             aria-label="History"
+            title="History"
           >
-            📜
+            <svg className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
           </button>
           <button
             onClick={handleToggleUnitConverter}
@@ -280,6 +296,7 @@ export function SimpleCalculator() {
                 : 'bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-500'
             }`}
             aria-label="Unit Converter"
+            title="Unit Converter"
           >
             📏
           </button>
@@ -291,6 +308,7 @@ export function SimpleCalculator() {
                 : 'bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-500'
             }`}
             aria-label="Toggle Scientific"
+            title="Scientific Mode"
           >
             √x
           </button>
@@ -298,8 +316,11 @@ export function SimpleCalculator() {
             onClick={backspace}
             className="flex-1 p-2 sm:p-3 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 transition-colors text-xs sm:text-sm"
             aria-label="Backspace"
+            title="Backspace"
           >
-            ✕
+            <svg className="w-5 h-5 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
           </button>
         </div>
 
