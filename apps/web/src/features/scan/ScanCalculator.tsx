@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { evaluateExpression } from '@calculator-suite/math-core';
 import Tesseract from 'tesseract.js';
+import { CameraCapture } from './CameraCapture';
 
 export function ScanCalculator() {
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
@@ -9,6 +10,8 @@ export function ScanCalculator() {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showCamera, setShowCamera] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -21,10 +24,28 @@ export function ScanCalculator() {
     }
   };
 
-  const handleCapture = async () => {
-    // Placeholder for camera capture
-    // In a full implementation, this would use getUserMedia API
-    alert('Camera capture would be implemented here with getUserMedia API');
+  const handleCapture = () => {
+    // Check if getUserMedia is supported
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      // Fallback to file input for unsupported browsers
+      fileInputRef.current?.click();
+      return;
+    }
+    setShowCamera(true);
+  };
+
+  const handleCameraCapture = (imageData: string) => {
+    setCapturedImage(imageData);
+    setShowCamera(false);
+  };
+
+  const handleRetake = () => {
+    setCapturedImage(null);
+    setRecognizedText('');
+    setConfidence(null);
+    setResult(null);
+    setError(null);
+    setShowCamera(true);
   };
 
   const handleRecognize = async () => {
@@ -125,13 +146,22 @@ export function ScanCalculator() {
                 alt="Captured"
                 className="w-full max-h-48 sm:max-h-64 object-contain rounded-lg border border-gray-300 dark:border-gray-600"
               />
-              <button
-                onClick={handleReset}
-                className="absolute top-2 right-2 p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
-                aria-label="Clear image"
-              >
-                ✕
-              </button>
+              <div className="absolute top-2 right-2 flex gap-2">
+                <button
+                  onClick={handleRetake}
+                  className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                  aria-label="Retake photo"
+                >
+                  🔄
+                </button>
+                <button
+                  onClick={handleReset}
+                  className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                  aria-label="Clear image"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -207,10 +237,27 @@ export function ScanCalculator() {
         {/* Offline Message */}
         <div className="mt-4 sm:mt-6 p-3 sm:p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
           <p className="text-xs sm:text-sm text-yellow-800 dark:text-yellow-200">
-            ℹ️ OCR requires an active internet connection for the first load. Offline mode will be available after the OCR library is cached.
+            ℹ️ First scan loads the OCR engine (~10 MB). Later scans work offline once cached.
           </p>
         </div>
       </div>
+
+      {/* Camera Capture Overlay */}
+      <CameraCapture
+        isOpen={showCamera}
+        onClose={() => setShowCamera(false)}
+        onCapture={handleCameraCapture}
+      />
+
+      {/* Hidden file input for fallback */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={handleFileUpload}
+        className="hidden"
+      />
     </div>
   );
 }
