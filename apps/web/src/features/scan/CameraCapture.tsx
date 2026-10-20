@@ -26,6 +26,11 @@ export function CameraCapture({ isOpen, onClose, onCapture }: CameraCaptureProps
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [showFlash, setShowFlash] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [showCropMode, setShowCropMode] = useState(false);
+  const [cropRect, setCropRect] = useState({ x: 0, y: 0, width: 0, height: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Start camera when overlay opens
   useEffect(() => {
@@ -54,12 +59,16 @@ export function CameraCapture({ isOpen, onClose, onCapture }: CameraCaptureProps
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) {
-        onClose();
+        if (showCropMode) {
+          setShowCropMode(false);
+        } else {
+          onClose();
+        }
       }
     };
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, showCropMode]);
 
   // Lock body scroll when open
   useEffect(() => {
@@ -83,19 +92,77 @@ export function CameraCapture({ isOpen, onClose, onCapture }: CameraCaptureProps
     setTimeout(() => setShowFlash(false), 150);
 
     try {
-      // Calculate crop rect (center 80% of frame)
-      const videoWidth = videoRef.current.videoWidth;
-      const videoHeight = videoRef.current.videoHeight;
-      const cropRect = calculateCropRect(videoWidth, videoHeight, videoWidth * 0.8, videoHeight * 0.8);
+      if (showCropMode && cropRect.width > 0 && cropRect.height > 0) {
+        // Use custom crop
+        const videoWidth = videoRef.current.videoWidth;
+        const videoHeight = videoRef.current.videoHeight;
+        const scaleX = videoWidth / (videoRef.current.offsetWidth || videoWidth);
+        const scaleY = videoHeight / (videoRef.current.offsetHeight || videoHeight);
 
-      // Capture and process image
-      const imageData = captureToDataUrl(videoRef.current, cropRect, 1600);
-      onCapture(imageData);
+        const scaledCrop = {
+          x: cropRect.x * scaleX,
+          y: cropRect.y * scaleY,
+          width: cropRect.width * scaleX,
+          height: cropRect.height * scaleY
+        };
+
+        const imageData = captureToDataUrl(videoRef.current, scaledCrop, 1600);
+        onCapture(imageData);
+      } else {
+        // Use default center crop (80% of frame)
+        const videoWidth = videoRef.current.videoWidth;
+        const videoHeight = videoRef.current.videoHeight;
+        const defaultCrop = calculateCropRect(videoWidth, videoHeight, videoWidth * 0.8, videoHeight * 0.8);
+
+        const imageData = captureToDataUrl(videoRef.current, defaultCrop, 1600);
+        onCapture(imageData);
+      }
       onClose();
     } catch (err) {
       console.error('Failed to capture image:', err);
     } finally {
       setIsCapturing(false);
+      setShowCropMode(false);
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    setDragStart({ x, y });
+    setCropRect({ x, y, width: 0, height: 0 });
+    setIsDragging(true);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const width = x - dragStart.x;
+    const height = y - dragStart.y;
+
+    setCropRect({
+      x: width < 0 ? x : dragStart.x,
+      y: height < 0 ? y : dragStart.y,
+      width: Math.abs(width),
+      height: Math.abs(height)
+    });
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const toggleCropMode = () => {
+    setShowCropMode(!showCropMode);
+    if (!showCropMode) {
+      // Reset crop rect when entering crop mode
+      setCropRect({ x: 0, y: 0, width: 0, height: 0 });
     }
   };
 
@@ -215,6 +282,19 @@ export function CameraCapture({ isOpen, onClose, onCapture }: CameraCaptureProps
               </button>
             )}
 
+            <button
+              onClick={toggleCropMode}
+              className={`p-3 rounded-full transition-colors ${
+                showCropMode ? 'bg-blue-500 text-white' : 'bg-black/50 text-white hover:bg-black/70'
+              }`}
+              aria-label={showCropMode ? 'Exit crop mode' : 'Enter crop mode'}
+              title={showCropMode ? 'Exit crop mode' : 'Crop image'}
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+              </svg>
+            </button>
+
             {hasTorch && (
               <button
                 onClick={handleToggleTorch}
@@ -240,6 +320,44 @@ export function CameraCapture({ isOpen, onClose, onCapture }: CameraCaptureProps
               </svg>
             </button>
           </div>
+
+          {/* Crop Overlay */}
+          {showCropMode && (
+            <div
+              ref={containerRef}
+              className="absolute inset-0 cursor-crosshair"
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+            >
+              {cropRect.width > 0 && cropRect.height > 0 && (
+                <div
+                  className="absolute border-2 border-blue-500 bg-blue-500/20"
+                  style={{
+                    left: cropRect.x,
+                    top: cropRect.y,
+                    width: cropRect.width,
+                    height: cropRect.height
+                  }}
+                />
+              )}
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/70 text-white px-4 py-2 rounded-lg text-sm">
+                Drag to select crop area
+              </div>
+            </div>
+          )}
+
+          {/* Guide Frame Overlay (only when not in crop mode) */}
+          {!showCropMode && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="border-2 border-white/50 border-dashed w-[80%] h-[80%] rounded-lg relative">
+                <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-white text-xs bg-black/50 px-2 py-1 rounded">
+                  Align the expression inside the box
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Bottom Controls */}
           <div className="absolute bottom-0 left-0 right-0 p-6 flex justify-center items-center pb-[env(safe-area-inset-bottom)]">

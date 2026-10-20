@@ -6,7 +6,7 @@ interface ScientificSectionProps {
 }
 
 export function ScientificSection({ appendToExpression }: ScientificSectionProps) {
-  const { showScientific, angleMode, setAngleMode } = useCalculatorStore();
+  const { showScientific } = useCalculatorStore();
   const [operatorSet, setOperatorSet] = useState(0);
 
   if (!showScientific) return null;
@@ -55,51 +55,35 @@ export function ScientificSection({ appendToExpression }: ScientificSectionProps
 
   const currentSet = operatorSets[operatorSet];
 
+  const handleSwapSet = () => {
+    setOperatorSet((prev) => (prev < operatorSets.length - 1 ? prev + 1 : 0));
+  };
+
   return (
-    <div className="mb-2 space-y-2 transition-all duration-300 ease-in-out">
-      <div className="flex justify-between items-center gap-2">
+    <div className="mb-2 transition-all duration-300 ease-in-out">
+      <div className="flex justify-between gap-1 sm:gap-2">
+        <div className="grid grid-cols-5 gap-1 sm:gap-2 flex-1">
+          {currentSet.map((func) => (
+            <button
+              key={func.label}
+              onClick={() => appendToExpression(func.value)}
+              className="p-2 sm:p-3 bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-xs sm:text-sm"
+              aria-label={func.label}
+            >
+              {func.label}
+            </button>
+          ))}
+        </div>
         <button
-          onClick={() => setAngleMode(angleMode === 'deg' ? 'rad' : 'deg')}
-          className={`p-2 sm:p-3 rounded-lg font-medium transition-colors text-xs sm:text-sm ${
-            angleMode === 'deg'
-              ? 'bg-blue-500 text-white'
-              : 'bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-500'
-          }`}
-          aria-label="Toggle angle mode"
-        >
-          {angleMode.toUpperCase()}
-        </button>
-        <button
-          onClick={() => setOperatorSet((prev) => (prev < operatorSets.length - 1 ? prev + 1 : 0))}
-          className="p-2 sm:p-3 bg-purple-500 text-white rounded-lg font-medium hover:bg-purple-600 transition-colors text-xs sm:text-sm flex items-center justify-center"
+          onClick={handleSwapSet}
+          className="p-2 sm:p-3 bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-xs sm:text-sm"
           aria-label="Swap operator set"
           title="Swap operators"
         >
-          <svg
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            fill="none"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="w-5 h-5"
-            aria-hidden="true"
-          >
-            <path d="M7 16V4M7 4L3 8M7 4L11 8M17 8v12M17 20l4-4M17 20l-4-4" />
+          <svg className="w-4 h-4 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
           </svg>
         </button>
-      </div>
-      <div className="grid grid-cols-5 gap-1 sm:gap-2">
-        {currentSet.map((func) => (
-          <button
-            key={func.label}
-            onClick={() => appendToExpression(func.value)}
-            className="p-2 sm:p-3 bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-xs sm:text-sm"
-            aria-label={func.label}
-          >
-            {func.label}
-          </button>
-        ))}
       </div>
     </div>
   );
