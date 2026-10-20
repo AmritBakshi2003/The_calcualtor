@@ -10,14 +10,6 @@ A responsive, accessible web calculator suite with Samsung-style workflow, unit 
 - **Financial Calculator**: EMI, amortization, compound interest, SIP, ROI, NPV, IRR, tax/GST
 - **Scanner Mode**: Camera capture and image upload with local OCR (Tesseract.js)
 
-### Samsung-Style Workflow
-- **Expandable Scientific Section**: Click √x to reveal scientific functions with smooth animation
-- **In-Place History Panel**: History slides in with basic operators (+, −, ×, ÷) available without closing
-- **Integrated Unit Converter**: 9 categories (Length, Area, Temperature, Volume, Mass, Data, Speed, Time, Tip) with in-app interface
-- **Backspace on Display**: Located in function toolbar for easy access
-- **Single Clear Button**: Only "C" for clear operations
-- **Smart Mode Switching**: Only one of scientific, unit converter, or simple mode active at a time
-
 ### Additional Features
 - **Tip Calculator**: Calculate tip amount, total bill, and split per head
 - **Local History**: Persisted calculation history with search, export, and reuse
