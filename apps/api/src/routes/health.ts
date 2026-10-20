@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { AppError } from '../middleware/errorHandler.js';
 
-const router = Router();
+const router: Router = Router();
 
 /**
  * GET /api/health
