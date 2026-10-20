@@ -9,6 +9,9 @@ dist/
 dist-ssr/
 *.local
 
+# Tesseract assets (downloaded during build)
+apps/web/public/tesseract/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -102,6 +102,50 @@ npm run typecheck
 
 ## Deployment
 
+### Cloudflare Workers Builds (Recommended)
+
+This project is configured for deployment to Cloudflare Workers Builds via Git integration.
+
+#### Step 1: Create Cloudflare Workers Project
+
+1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/)
+2. Navigate to **Workers & Pages** → **Create Application**
+3. Select **Pages** → **Connect to Git**
+4. Select your GitHub repository
+5. Choose the branch (e.g., `main`)
+6. Configure build settings:
+   - **Build command**: `npm run build`
+   - **Build output directory**: `apps/web/dist`
+7. Click **Save and Deploy**
+
+The build will automatically run on every push to the connected branch.
+
+#### Important Notes
+
+**IndexedDB Data:**
+- IndexedDB data is tied to the origin (domain)
+- Once users save history/settings, the production domain should not change
+- If you need to change domains, users will lose their persisted data
+
+**Running Production Build Locally:**
+```bash
+npm run build
+npm run preview
+```
+The preview server will run at `http://localhost:4173`
+
+#### CI/CD
+
+GitHub Actions automatically runs tests on every PR and push:
+- Type checking
+- Linting
+- Unit tests (Vitest)
+- E2E tests (Playwright)
+
+The Cloudflare Workers Build will only deploy if tests pass in the GitHub Actions workflow.
+
+### Alternative Deployment
+
 The app is designed as a static site that requires no backend, database, or Docker. See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions for:
 - Static hosting (Vercel, Netlify, GitHub Pages)
 - Self-hosting (nginx, Apache, Caddy, or any static file server)
