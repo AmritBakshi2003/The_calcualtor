@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { evaluateExpression } from '@calculator-suite/math-core';
 import Tesseract from 'tesseract.js';
 import { CameraCapture } from './CameraCapture';
+import { CropEditor } from './CropEditor';
 import { useOCRWorker } from './useOCRWorker';
 import { preprocessForOCR } from './ocrPreprocess';
 import { postprocessOCR, getCharConfidences, findLowConfidenceIndices } from './ocrPostprocess';
@@ -17,6 +18,7 @@ export function ScanCalculator() {
   const [showCamera, setShowCamera] = useState(false);
   const [blurWarning, setBlurWarning] = useState(false);
   const [lowConfidenceIndices, setLowConfidenceIndices] = useState<number[]>([]);
+  const [showCropEditor, setShowCropEditor] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { getWorker } = useOCRWorker();
 
@@ -32,15 +34,29 @@ export function ScanCalculator() {
     };
   }, []);
 
+  // Guard against oversized uploads (the accept attribute is only a UI hint).
+  const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15MB
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setCapturedImage(event.target?.result as string);
-      };
-      reader.readAsDataURL(file);
+    // Reset so the same file can be re-selected after an error
+    e.target.value = '';
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setError('Please upload an image file (JPEG, PNG, or WebP).');
+      return;
     }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError(`Image is too large (max ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB). Please use a smaller image.`);
+      return;
+    }
+
+    setError(null);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setCapturedImage(event.target?.result as string);
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleCapture = () => {
@@ -138,7 +154,8 @@ export function ScanCalculator() {
       ctx.drawImage(img, 0, 0);
 
       const preprocessedCanvas = preprocessForOCR(canvas);
-      const preprocessedImageData = preprocessedCanvas.toDataURL('image/jpeg', 0.9);
+      // PNG (lossless) preserves crisp digit edges; JPEG artifacts degrade OCR.
+      const preprocessedImageData = preprocessedCanvas.toDataURL('image/png');
 
       // First OCR pass
       let result = await performOCR(preprocessedImageData);
@@ -202,6 +219,17 @@ export function ScanCalculator() {
     }
   };
 
+  const handleCropApply = (croppedDataUrl: string) => {
+    setCapturedImage(croppedDataUrl);
+    setShowCropEditor(false);
+    // A new image invalidates any previous recognition result
+    setRecognizedText('');
+    setConfidence(null);
+    setResult(null);
+    setError(null);
+    setLowConfidenceIndices([]);
+  };
+
   const handleReset = () => {
     setCapturedImage(null);
     setRecognizedText('');
@@ -255,6 +283,14 @@ export function ScanCalculator() {
                 className="w-full max-h-48 sm:max-h-64 object-contain rounded-lg border border-gray-300 dark:border-gray-600"
               />
               <div className="absolute top-2 right-2 flex gap-2">
+                <button
+                  onClick={() => setShowCropEditor(true)}
+                  className="p-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
+                  aria-label="Crop image"
+                  title="Crop image"
+                >
+                  ✂️
+                </button>
                 <button
                   onClick={handleRetake}
                   className="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
@@ -366,6 +402,15 @@ export function ScanCalculator() {
         onClose={() => setShowCamera(false)}
         onCapture={handleCameraCapture}
       />
+
+      {/* Crop Editor Overlay */}
+      {showCropEditor && capturedImage && (
+        <CropEditor
+          imageSrc={capturedImage}
+          onApply={handleCropApply}
+          onCancel={() => setShowCropEditor(false)}
+        />
+      )}
 
       {/* Hidden file input for fallback */}
       <input

@@ -164,14 +164,15 @@ export function useCamera(): UseCameraReturn {
     }
   }, [isTorchOn]);
 
-  // Handle visibility change - stop camera when tab is hidden
+  // Handle visibility change: STOP the camera when the tab is hidden.
+  // Deliberately do NOT auto-restart on return — this hook stays mounted even
+  // while the camera dialog is closed, so restarting would turn the camera on
+  // in the background without the user's consent (a privacy leak). Restart is
+  // driven only by the user opening the dialog via startCamera().
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden && streamRef.current) {
         stopCamera();
-      } else if (!document.hidden && !streamRef.current && !error) {
-        // Restart camera when tab becomes visible, if it was previously open
-        startCamera(currentFacingModeRef.current);
       }
     };
 
@@ -179,7 +180,7 @@ export function useCamera(): UseCameraReturn {
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [error, stopCamera, startCamera]);
+  }, [stopCamera]);
 
   // Cleanup on unmount
   useEffect(() => {

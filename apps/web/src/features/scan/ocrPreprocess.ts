@@ -1,6 +1,11 @@
 /**
  * OCR Image Preprocessing Functions
  * Pure functions that operate on canvas or ImageData
+ *
+ * Strategy: keep images GRAYSCALE with normalized contrast rather than
+ * hard-binarizing. Tesseract's LSTM engine reads grayscale far more reliably
+ * than a 1-bit image, especially under uneven lighting. Hard Otsu thresholding
+ * (the previous approach) erases thin digit strokes and amplifies JPEG noise.
  */
 
 /**
@@ -61,7 +66,9 @@ function otsuThreshold(imageData: ImageData): number {
 }
 
 /**
- * Apply adaptive thresholding using Otsu's method
+ * Apply global thresholding using Otsu's method.
+ * Retained for callers/tests that need a binary image; NOT used in the
+ * default OCR pipeline because it hurts LSTM accuracy on photos.
  */
 export function adaptiveThreshold(imageData: ImageData): ImageData {
   const threshold = otsuThreshold(imageData);
@@ -73,6 +80,60 @@ export function adaptiveThreshold(imageData: ImageData): ImageData {
     data[i] = value;
     data[i + 1] = value;
     data[i + 2] = value;
+  }
+
+  return imageData;
+}
+
+/**
+ * Stretch contrast so the darkest 2% maps to 0 and the brightest 2% maps to 255.
+ * This is a lightweight stand-in for CLAHE and makes faint digits readable
+ * without discarding grayscale detail the way binarization does.
+ */
+export function contrastStretch(imageData: ImageData): ImageData {
+  const data = imageData.data;
+  const histogram = new Array(256).fill(0);
+  const total = data.length / 4;
+
+  for (let i = 0; i < data.length; i += 4) {
+    histogram[data[i]]++;
+  }
+
+  // Find 2nd and 98th percentile cut points
+  const lowCount = total * 0.02;
+  const highCount = total * 0.98;
+  let cumulative = 0;
+  let low = 0;
+  let high = 255;
+  let lowFound = false;
+
+  for (let t = 0; t < 256; t++) {
+    cumulative += histogram[t];
+    if (!lowFound && cumulative >= lowCount) {
+      low = t;
+      lowFound = true;
+    }
+    if (cumulative >= highCount) {
+      high = t;
+      break;
+    }
+  }
+
+  const range = high - low;
+  if (range <= 0) return imageData;
+
+  // Build lookup table for speed
+  const lut = new Uint8ClampedArray(256);
+  for (let v = 0; v < 256; v++) {
+    const stretched = ((v - low) / range) * 255;
+    lut[v] = Math.min(255, Math.max(0, stretched));
+  }
+
+  for (let i = 0; i < data.length; i += 4) {
+    const v = lut[data[i]];
+    data[i] = v;
+    data[i + 1] = v;
+    data[i + 2] = v;
   }
 
   return imageData;
@@ -184,7 +245,17 @@ export function addWhiteBorder(canvas: HTMLCanvasElement, borderSize: number = 1
 }
 
 /**
- * Apply full preprocessing pipeline
+ * Apply full preprocessing pipeline (OCR-friendly).
+ *
+ * Order matters:
+ *  1. white border isolates content from the canvas edge,
+ *  2. grayscale removes color noise,
+ *  3. contrast stretch normalizes faint text WITHOUT destroying strokes,
+ *  4. invertIfDark handles light-on-dark captures,
+ *  5. upscale keeps glyphs near Tesseract's preferred ~32px height.
+ *
+ * Deliberately skips hard binarization (adaptiveThreshold) to protect accuracy.
+ * Output should be exported as PNG (lossless), never JPEG.
  */
 export function preprocessForOCR(canvas: HTMLCanvasElement): HTMLCanvasElement {
   // Add white border first
@@ -199,8 +270,8 @@ export function preprocessForOCR(canvas: HTMLCanvasElement): HTMLCanvasElement {
   // Apply grayscale
   imageData = grayscale(imageData);
 
-  // Apply adaptive threshold
-  imageData = adaptiveThreshold(imageData);
+  // Apply gentle contrast stretch (replaces hard thresholding)
+  imageData = contrastStretch(imageData);
 
   // Invert if dark
   imageData = invertIfDark(imageData);

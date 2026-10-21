@@ -1,12 +1,22 @@
-# Cache static assets for 1 year
+# Security headers for the Calculator Suite (Cloudflare Workers Static Assets)
+# Served from the assets directory; applies to all routes.
+
+# Cache static assets for 1 year (hashed filenames)
 /assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
 /tesseract/*
+  Cache-Control: public, max-age=31536000, immutable
 
 # No caching for index.html to always get latest
 /index.html
+  Cache-Control: no-cache
 
-# Security headers
 /*
   X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin
-  Permissions-Policy: camera=(self)
+  Permissions-Policy: camera=(self), microphone=(), geolocation=()
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' blob: data:; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
