@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { test, expect } from '@playwright/test';
 
 /**
@@ -31,6 +32,7 @@ test.describe('Scan calculator crop and OCR', () => {
       return c.toDataURL('image/png');
     });
     const base64 = dataUrl.split(',')[1];
+    // @ts-ignore - Buffer is available in Playwright test context (Node.js globals)
     const buffer = Buffer.from(base64, 'base64');
 
     // Feed it through the real file input
