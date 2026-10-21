@@ -1,50 +1,83 @@
 import { useEffect, useRef } from 'react';
 import Tesseract from 'tesseract.js';
 
+/**
+ * Characters the default OCR pass is allowed to emit. `x`/`X` are included so a
+ * printed multiplication sign is not forced into the nearest digit; postprocessing
+ * turns it into `*`.
+ */
+export const OCR_WHITELIST = '0123456789+-*/×÷().,=^%xX';
+
+/** Parameters the worker is returned to after any one-off pass. */
+export const OCR_DEFAULT_PARAMS = {
+  tessedit_char_whitelist: OCR_WHITELIST,
+  tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
+  // Without a DPI hint Tesseract guesses (and warns about) the resolution.
+  user_defined_dpi: '300',
+};
+
 export function useOCRWorker() {
   const workerRef = useRef<Tesseract.Worker | null>(null);
-  const isInitializingRef = useRef(false);
+  const initPromiseRef = useRef<Promise<Tesseract.Worker> | null>(null);
+  // Bumped on terminate so a worker that finishes initializing afterwards is discarded.
+  const epochRef = useRef(0);
 
-  const getWorker = async (): Promise<Tesseract.Worker> => {
+  const getWorker = (): Promise<Tesseract.Worker> => {
     if (workerRef.current) {
-      return workerRef.current;
+      return Promise.resolve(workerRef.current);
+    }
+    // Concurrent callers share one initialization instead of polling.
+    if (initPromiseRef.current) {
+      return initPromiseRef.current;
     }
 
-    if (isInitializingRef.current) {
-      // Wait for initialization to complete
-      await new Promise(resolve => setTimeout(resolve, 100));
-      return getWorker();
-    }
+    const epoch = epochRef.current;
 
-    isInitializingRef.current = true;
-
-    try {
+    const init = (async () => {
       const worker = await Tesseract.createWorker('eng', Tesseract.OEM.DEFAULT, {
         workerPath: `${import.meta.env.BASE_URL}tesseract/worker.min.js`,
         corePath: `${import.meta.env.BASE_URL}tesseract/`,
         langPath: `${import.meta.env.BASE_URL}tesseract/`,
-        logger: (m) => console.log(m),
+        // Progress logging is only useful while developing.
+        logger: import.meta.env.DEV ? (m) => console.debug(m) : () => {},
       });
 
-      // Set parameters for better OCR accuracy
-      await worker.setParameters({
-        tessedit_char_whitelist: '0123456789+-*/×÷().,=^%',
-        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
-      });
+      try {
+        await worker.setParameters(OCR_DEFAULT_PARAMS);
+      } catch (error) {
+        await worker.terminate();
+        throw error;
+      }
 
-      workerRef.current = worker;
-      isInitializingRef.current = false;
+      if (epoch === epochRef.current) {
+        workerRef.current = worker;
+      }
       return worker;
-    } catch (error) {
-      isInitializingRef.current = false;
+    })();
+
+    // On failure, allow the next call to retry from scratch.
+    initPromiseRef.current = init.catch((error) => {
+      if (epoch === epochRef.current) {
+        initPromiseRef.current = null;
+      }
       throw error;
-    }
+    });
+
+    return initPromiseRef.current;
   };
 
   const terminateWorker = async () => {
-    if (workerRef.current) {
-      await workerRef.current.terminate();
-      workerRef.current = null;
+    const pending = initPromiseRef.current;
+    const current = workerRef.current;
+    epochRef.current += 1;
+    workerRef.current = null;
+    initPromiseRef.current = null;
+
+    try {
+      const worker = current ?? (pending ? await pending : null);
+      await worker?.terminate();
+    } catch {
+      // Initialization failed or the worker was already terminated.
     }
   };
 
