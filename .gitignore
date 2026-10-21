@@ -49,3 +49,9 @@ Thumbs.db
 test-results/
 playwright-report/
 playwright/.cache/
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Tool-generated files
+.freebuff/
