@@ -44,7 +44,7 @@ describe('ocrPostprocess', () => {
     });
 
     it('handles null input', () => {
-      expect(postprocessOCR('' as any)).toBe('');
+      expect(postprocessOCR('')).toBe('');
     });
   });
 

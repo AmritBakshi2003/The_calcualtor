@@ -1,11 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { evaluateExpression } from '@calculator-suite/math-core';
 import Tesseract from 'tesseract.js';
 import { CameraCapture } from './CameraCapture';
 import { CropEditor } from './CropEditor';
-import { useOCRWorker } from './useOCRWorker';
+import { useOCRWorker, OCR_DEFAULT_PARAMS } from './useOCRWorker';
 import { preprocessForOCR } from './ocrPreprocess';
-import { postprocessOCR, getCharConfidences, findLowConfidenceIndices } from './ocrPostprocess';
+import { postprocessOCR, cleanForEvaluation, getKeptSymbolConfidences, findLowConfidenceIndices } from './ocrPostprocess';
 import { isBlurry } from './blurDetection';
 
 export function ScanCalculator() {
@@ -19,20 +19,11 @@ export function ScanCalculator() {
   const [blurWarning, setBlurWarning] = useState(false);
   const [lowConfidenceIndices, setLowConfidenceIndices] = useState<number[]>([]);
   const [showCropEditor, setShowCropEditor] = useState(false);
+  // True once a recognition attempt has finished (even an empty or failed one),
+  // so the edit box stays available for typing the expression manually.
+  const [hasScanned, setHasScanned] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { getWorker } = useOCRWorker();
-
-  // Store worker reference for cleanup
-  const workerRef = useRef<Tesseract.Worker | null>(null);
-
-  // Cleanup worker on unmount
-  useEffect(() => {
-    return () => {
-      if (workerRef.current) {
-        workerRef.current.terminate();
-      }
-    };
-  }, []);
 
   // Guard against oversized uploads (the accept attribute is only a UI hint).
   const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15MB
@@ -99,31 +90,42 @@ export function ScanCalculator() {
     setConfidence(null);
     setResult(null);
     setError(null);
+    setHasScanned(false);
     setShowCamera(true);
   };
 
-  const performOCR = async (imageData: string, useSingleBlock = false): Promise<Tesseract.RecognizeResult> => {
+  interface PassOptions {
+    psm?: Tesseract.PSM;
+    /** Pass '' to disable the character whitelist for this pass only. */
+    whitelist?: string;
+  }
+
+  const performOCR = async (imageData: string, options: PassOptions = {}): Promise<Tesseract.RecognizeResult> => {
     const worker = await getWorker();
-    workerRef.current = worker;
 
-    // Update PSM mode if retrying with single block
-    if (useSingleBlock) {
-      await worker.setParameters({
-        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
-      });
+    const overrides: Partial<Tesseract.WorkerParams> = {};
+    if (options.psm !== undefined) overrides.tessedit_pageseg_mode = options.psm;
+    if (options.whitelist !== undefined) overrides.tessedit_char_whitelist = options.whitelist;
+    const hasOverrides = Object.keys(overrides).length > 0;
+
+    try {
+      if (hasOverrides) await worker.setParameters(overrides);
+      return await worker.recognize(imageData);
+    } finally {
+      // Always restore defaults, even if recognition threw, so one failed pass
+      // cannot leave the shared worker stuck in a different mode.
+      if (hasOverrides) {
+        try {
+          await worker.setParameters(OCR_DEFAULT_PARAMS);
+        } catch {
+          // Nothing more to do; the next pass sets what it needs.
+        }
+      }
     }
-
-    const result = await worker.recognize(imageData);
-
-    // Reset to single line for next time
-    if (useSingleBlock) {
-      await worker.setParameters({
-        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
-      });
-    }
-
-    return result;
   };
+
+  /** Raw OCR text -> expression the evaluator accepts. */
+  const toExpression = (raw: string) => cleanForEvaluation(postprocessOCR(raw.trim()));
 
   const handleRecognize = async () => {
     if (!capturedImage) {
@@ -139,8 +141,9 @@ export function ScanCalculator() {
     try {
       // Preprocess image
       const img = new Image();
-      await new Promise((resolve) => {
-        img.onload = resolve;
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Could not load the image'));
         img.src = capturedImage;
       });
 
@@ -159,53 +162,75 @@ export function ScanCalculator() {
 
       // First OCR pass
       let result = await performOCR(preprocessedImageData);
-      let processedText = postprocessOCR(result.data.text.trim());
+      let processedText = toExpression(result.data.text);
 
       // Check if we need retry (low confidence or doesn't parse)
       const confidence = result.data.confidence || 0;
-      const evalResult = evaluateExpression(processedText);
+      let evalResult = evaluateExpression(processedText);
 
       if (confidence < 70 || !evalResult.success) {
         // Retry with single block mode
-        const retryResult = await performOCR(preprocessedImageData, true);
-        const retryText = postprocessOCR(retryResult.data.text.trim());
+        const retryResult = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_BLOCK });
+        const retryText = toExpression(retryResult.data.text);
         const retryEval = evaluateExpression(retryText);
 
         // Pick the best result (prefer one that parses)
         if (retryEval.success && !evalResult.success) {
           result = retryResult;
           processedText = retryText;
+          evalResult = retryEval;
         } else if (retryEval.success && evalResult.success) {
           // Both parse, pick higher confidence
           if (retryResult.data.confidence > result.data.confidence) {
             result = retryResult;
             processedText = retryText;
+            evalResult = retryEval;
           }
         }
       }
 
-      // Get character-level confidences for highlighting
-      const charConfidences = getCharConfidences(result);
+      // Last resort: the whitelist forces unreadable glyphs into the nearest
+      // allowed character (often a wrong digit). If nothing parsed yet, read
+      // once more without it and let postprocessing map look-alike letters.
+      if (!evalResult.success) {
+        const openResult = await performOCR(preprocessedImageData, { whitelist: '' });
+        const openText = toExpression(openResult.data.text);
+        if (evaluateExpression(openText).success) {
+          result = openResult;
+          processedText = openText;
+        }
+      }
+
+      // Character-level confidences (only symbols that survive postprocessing)
+      const charConfidences = getKeptSymbolConfidences(result);
       const lowIndices = findLowConfidenceIndices(charConfidences, 60);
       setLowConfidenceIndices(lowIndices);
 
       setRecognizedText(processedText);
       setConfidence(result.data.confidence || 0);
-      setIsProcessing(false);
+
+      if (!processedText) {
+        setError('No text detected. Type the expression below, crop closer to it, or retake the photo.');
+      }
     } catch (err) {
-      setError('Failed to recognize text from image');
+      console.error('OCR failed:', err);
+      setError('Failed to recognize text from image. You can type the expression below instead.');
+    } finally {
+      setHasScanned(true);
       setIsProcessing(false);
     }
   };
 
   const handleSolve = () => {
-    if (!recognizedText) {
+    // Clean again: the user may have edited the text (typed ×, ÷, a trailing "=", ...)
+    const expression = cleanForEvaluation(recognizedText);
+    if (!expression) {
       setError('No expression to solve');
       return;
     }
 
     try {
-      const evalResult = evaluateExpression(recognizedText);
+      const evalResult = evaluateExpression(expression);
       if (evalResult.success) {
         setResult(evalResult.result as string);
         setError(null);
@@ -228,6 +253,7 @@ export function ScanCalculator() {
     setResult(null);
     setError(null);
     setLowConfidenceIndices([]);
+    setHasScanned(false);
   };
 
   const handleReset = () => {
@@ -238,6 +264,7 @@ export function ScanCalculator() {
     setError(null);
     setBlurWarning(false);
     setLowConfidenceIndices([]);
+    setHasScanned(false);
   };
 
   return (
@@ -329,15 +356,28 @@ export function ScanCalculator() {
         )}
 
         {/* Recognized Text Section */}
-        {recognizedText && (
+        {(recognizedText || hasScanned) && (
           <div className="mb-4 sm:mb-6 space-y-3 sm:space-y-4">
             <div>
-              <label className="block text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 sm:mb-2">
+              <label
+                htmlFor="recognized-expression"
+                className="block text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 sm:mb-2"
+              >
                 Recognized Expression (Edit if needed)
               </label>
               <textarea
+                id="recognized-expression"
                 value={recognizedText}
-                onChange={(e) => setRecognizedText(e.target.value)}
+                onChange={(e) => {
+                  // Editing invalidates the previous result, error and highlights
+                  setRecognizedText(e.target.value);
+                  setResult(null);
+                  setError(null);
+                  setLowConfidenceIndices([]);
+                }}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
                 className="w-full p-3 sm:p-4 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-xs sm:text-sm"
                 rows={3}
                 placeholder="Recognized expression will appear here"
