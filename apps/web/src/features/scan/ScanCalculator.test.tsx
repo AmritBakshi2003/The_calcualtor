@@ -9,12 +9,14 @@ const { worker } = vi.hoisted(() => ({
   },
 }));
 
+const terminateWorker = vi.fn().mockResolvedValue(undefined);
+
 vi.mock('tesseract.js', () => ({
   default: { PSM: { SINGLE_LINE: '7', SINGLE_BLOCK: '6' } },
 }));
 
 vi.mock('./useOCRWorker', () => ({
-  useOCRWorker: () => ({ getWorker: async () => worker }),
+  useOCRWorker: () => ({ getWorker: async () => worker, terminateWorker }),
   OCR_DEFAULT_PARAMS: {},
 }));
 
@@ -53,6 +55,7 @@ describe('ScanCalculator editing', () => {
     // restoreAllMocks() in afterEach strips vi.fn() implementations, so set them every time
     worker.setParameters.mockReset().mockResolvedValue(undefined);
     worker.recognize.mockReset();
+    terminateWorker.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -64,7 +67,7 @@ describe('ScanCalculator editing', () => {
     worker.recognize.mockResolvedValue(ocrText(''));
     const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
 
-    expect(await screen.findByText(/no text detected/i)).toBeTruthy();
+    expect(await screen.findByText(/nothing readable was found/i)).toBeTruthy();
 
     fireEvent.change(box, { target: { value: '2+3' } });
     fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
@@ -103,6 +106,22 @@ describe('ScanCalculator editing', () => {
 
     fireEvent.change(box, { target: { value: '2+4' } });
     expect(screen.queryByText('5')).toBeNull();
+  });
+
+  it('reloads the scanner engine and retries when the first attempt reads nothing', async () => {
+    // A stuck engine (stale cached worker, half-downloaded language data)
+    // returns junk without throwing: "150514" on the image, "." in the box.
+    worker.recognize
+      .mockResolvedValueOnce(ocrText('.')) // engine 1, block pass: garbage
+      .mockResolvedValueOnce(ocrText('.')) // engine 1, fallback pass: garbage
+      .mockResolvedValueOnce(ocrText('150514')); // freshly created engine
+
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('150514'));
+    expect(terminateWorker).toHaveBeenCalled();
+    // the error copy tells the user what happened when it cannot recover
+    expect(worker.recognize.mock.calls.length).toBeGreaterThan(1);
   });
 
   it('restores default OCR parameters even when a retry pass throws', async () => {

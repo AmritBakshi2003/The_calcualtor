@@ -8,7 +8,11 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt' + <PwaUpdateBanner>: a deploy is announced and applied on a
+      // click. 'autoUpdate' silently left already-open tabs running the old
+      // bundle until the user reloaded, which made production behave
+      // differently from the dev server (which has no service worker).
+      registerType: 'prompt',
       includeAssets: ['icons/*.svg'],
       manifest: {
         name: 'Calculator Suite',
@@ -56,6 +60,12 @@ export default defineConfig({
   server: {
     port: 5173,
     open: true,
+    // Dev-only allowlist for remote preview hosts (e.g. cloud dev-server
+    // sandboxes). No hostname is baked into this file: set
+    // VITE_ALLOWED_HOSTS="a.example.com,b.example.com" when starting Vite.
+    allowedHosts: process.env.VITE_ALLOWED_HOSTS
+      ? process.env.VITE_ALLOWED_HOSTS.split(',').map((h) => h.trim()).filter(Boolean)
+      : undefined,
   },
   build: {
     outDir: 'dist',

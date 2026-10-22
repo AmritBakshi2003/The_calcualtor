@@ -196,6 +196,20 @@ For additional optimization:
 - Check browser console for service worker errors
 - Ensure the service worker is caching the app shell
 
+### Production Shows Old Version / Scanner Behaves Differently From Dev
+
+- Deployed tabs can keep running the previous bundle after the service worker
+  updates silently. The app now shows a "new version is ready" banner with a
+  Reload button as soon as an update is waiting; users should also get the
+  latest code by hard-reloading once after a deploy.
+- The scanner recovers from a stuck OCR engine (stale cached Tesseract worker
+  or half-downloaded language data) by terminating and recreating it on a
+  second attempt; a third attempt surfaces the error for manual entry.
+
+Note: the root-level `npm run test` script still launches `test:unit` in Vitest
+watch mode and does not exit by itself; use `npm run test:core`,
+`npx vitest run` (in apps/web), and `npm run test:api` for one-off CI-style runs.
+
 ## CI/CD
 
 The project includes GitHub Actions CI workflow that:

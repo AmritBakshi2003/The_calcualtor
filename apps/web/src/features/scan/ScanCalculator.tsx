@@ -35,7 +35,7 @@ export function ScanCalculator() {
   // Set when the user edits while a recognition pass is still running; the
   // result must not overwrite what they typed.
   const editedWhileProcessingRef = useRef(false);
-  const { getWorker } = useOCRWorker();
+  const { getWorker, terminateWorker } = useOCRWorker();
 
   // Guard against oversized uploads (the accept attribute is only a UI hint).
   const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15MB
@@ -166,6 +166,61 @@ export function ScanCalculator() {
     return out;
   };
 
+  /** Run every OCR pass over a preprocessed image and return the best candidate. */
+  const runRecognition = async (preprocessedCanvas: HTMLCanvasElement): Promise<OcrCandidate | null> => {
+    // PNG (lossless) preserves crisp digit edges; JPEG artifacts degrade OCR.
+    const preprocessedImageData = preprocessedCanvas.toDataURL('image/png');
+
+    const candidates: OcrCandidate[] = [];
+    const consider = (
+      source: OcrCandidate['source'],
+      raw: string,
+      confidence: number,
+      segment?: OcrSegment
+    ) => {
+      const expression = toExpression(raw);
+      candidates.push({
+        source,
+        expression,
+        confidence,
+        segment,
+        score: expressionScore(expression, confidence, raw),
+      });
+    };
+
+    // Block pass: also segments the image into lines, which is what lets us
+    // find the expression on a receipt or a screenshot full of other numbers.
+    const block = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_BLOCK });
+    const ranked = rankSegments(toSegments(block));
+
+    consider('block', block.data.text, block.data.confidence, ranked[0]);
+    for (const line of ranked.slice(0, 3)) {
+      consider('line', line.text, line.confidence, line);
+    }
+
+    // Re-read the winning line on its own: neighbouring text pulls the
+    // recognizer towards the wrong glyphs even when segmentation was right.
+    if (ranked.length > 1 && ranked[0].bbox) {
+      const cropped = cropToBbox(preprocessedCanvas, ranked[0].bbox);
+      const cropResult = await performOCR(cropped.toDataURL('image/png'), {
+        psm: Tesseract.PSM.SINGLE_LINE,
+      });
+      consider('crop', cropResult.data.text, cropResult.data.confidence, ranked[0]);
+    }
+
+    let best = pickBestCandidate(candidates);
+
+    // Last resort: one line over the whole image. Photos with a busy
+    // background sometimes segment into fragments the block pass garbles.
+    if (!best || best.score < 25) {
+      const single = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_LINE });
+      consider('fallback', single.data.text, single.data.confidence);
+      best = pickBestCandidate(candidates) ?? best;
+    }
+
+    return best;
+  };
+
   const handleRecognize = async () => {
     if (!capturedImage) {
       setError('Please capture or upload an image first');
@@ -197,54 +252,15 @@ export function ScanCalculator() {
       ctx.drawImage(img, 0, 0);
 
       const preprocessedCanvas = preprocessForOCR(canvas);
-      // PNG (lossless) preserves crisp digit edges; JPEG artifacts degrade OCR.
-      const preprocessedImageData = preprocessedCanvas.toDataURL('image/png');
+      let best = await runRecognition(preprocessedCanvas);
 
-      const candidates: OcrCandidate[] = [];
-      const consider = (
-        source: OcrCandidate['source'],
-        raw: string,
-        confidence: number,
-        segment?: OcrSegment
-      ) => {
-        const expression = toExpression(raw);
-        candidates.push({
-          source,
-          expression,
-          confidence,
-          segment,
-          score: expressionScore(expression, confidence, raw),
-        });
-      };
-
-      // Block pass: also segments the image into lines, which is what lets us
-      // find the expression on a receipt or a screenshot full of other numbers.
-      const block = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_BLOCK });
-      const ranked = rankSegments(toSegments(block));
-
-      consider('block', block.data.text, block.data.confidence, ranked[0]);
-      for (const line of ranked.slice(0, 3)) {
-        consider('line', line.text, line.confidence, line);
-      }
-
-      // Re-read the winning line on its own: neighbouring text pulls the
-      // recognizer towards the wrong glyphs even when segmentation was right.
-      if (ranked.length > 1 && ranked[0].bbox) {
-        const cropped = cropToBbox(preprocessedCanvas, ranked[0].bbox);
-        const cropResult = await performOCR(cropped.toDataURL('image/png'), {
-          psm: Tesseract.PSM.SINGLE_LINE,
-        });
-        consider('crop', cropResult.data.text, cropResult.data.confidence, ranked[0]);
-      }
-
-      let best = pickBestCandidate(candidates);
-
-      // Last resort: one line over the whole image. Photos with a busy
-      // background sometimes segment into fragments the block pass garbles.
-      if (!best || best.score < 25) {
-        const single = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_LINE });
-        consider('fallback', single.data.text, single.data.confidence);
-        best = pickBestCandidate(candidates) ?? best;
+      // An engine stuck in a bad state — an outdated cached worker.min.js, or
+      // a half-downloaded language file — returns nothing usable WITHOUT
+      // throwing, so the user just sees a stray character. Discarding the
+      // worker and running the passes once more recovers automatically.
+      if (!best?.expression) {
+        await terminateWorker();
+        best = await runRecognition(preprocessedCanvas);
       }
 
       const processedText = best?.expression ?? '';
@@ -258,11 +274,17 @@ export function ScanCalculator() {
       }
 
       if (!processedText) {
-        setError('No text detected. Type the expression below, crop closer to it, or retake the photo.');
+        setError(
+          'Nothing readable was found. The scanner engine has been reloaded — press Recognize Text to try again, crop closer to the expression, or type it below.'
+        );
       }
     } catch (err) {
       console.error('OCR failed:', err);
-      setError('Failed to recognize text from image. You can type the expression below instead.');
+      // Drop the worker so the next attempt starts from a clean engine.
+      await terminateWorker();
+      setError(
+        'Failed to recognize text from image. The scanner engine has been reloaded — press Recognize Text to try again, or type the expression below.'
+      );
     } finally {
       setHasScanned(true);
       setIsProcessing(false);

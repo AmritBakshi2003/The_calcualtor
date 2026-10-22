@@ -1,4 +1,5 @@
 import { Layout } from './components/Layout';
+import { PwaUpdateBanner } from './components/PwaUpdateBanner';
 import { SimpleCalculator } from './features/simple/SimpleCalculator';
 import { FinanceCalculator } from './features/finance/FinanceCalculator';
 import { ScanCalculator } from './features/scan/ScanCalculator';
@@ -23,6 +24,7 @@ function App() {
   return (
     <Layout>
       {renderCalculator()}
+      <PwaUpdateBanner />
     </Layout>
   );
 }
