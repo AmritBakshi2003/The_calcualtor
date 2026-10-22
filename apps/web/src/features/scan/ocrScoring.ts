@@ -82,6 +82,18 @@ function compact(text: string): string {
   return text.replace(/\s+/g, '');
 }
 
+/**
+ * Drop words before testing date/clock shapes.
+ *
+ * The guards used to be anchored with ^...$, so ANY word on the line weakened
+ * them: "Order 12/03/2025" on a receipt looked like a digit line, beat the
+ * real expression, and even evaluated as a division. Numbers and operators
+ * must stay: stripping them would erase "12/03/2025" into just spaces.
+ */
+function stripWords(text: string): string {
+  return text.replace(/[A-Za-z]+/g, ' ');
+}
+
 /** Operators with an operand on both sides ("2+3", "(1+2)*3"), not "-5". */
 function countOperators(text: string): number {
   let count = 0;
@@ -97,7 +109,8 @@ function countOperators(text: string): number {
  * Used to choose between text lines before any cleaning happens.
  */
 export function textShapeScore(raw: string): number {
-  const text = compact(normalizeForScoring(raw));
+  // normalizeForScoring first ("2x3" -> "2*3"), then strip words away.
+  const text = compact(stripWords(normalizeForScoring(raw)));
   let score = Math.min(countDigits(text), 10) * 2;
   score += Math.min(countOperators(text), 3) * 14;
   if (text.includes('=')) score += 6;
@@ -131,7 +144,7 @@ export function expressionScore(expression: string, confidence: number, raw?: st
   }
   score += parses ? 20 : -40;
 
-  const scoredAs = compact(normalizeForScoring(raw ?? expression));
+  const scoredAs = compact(stripWords(normalizeForScoring(raw ?? expression)));
   if (DATE_LIKE.test(scoredAs) || CLOCK_LIKE.test(scoredAs)) score -= 45;
 
   return score;
