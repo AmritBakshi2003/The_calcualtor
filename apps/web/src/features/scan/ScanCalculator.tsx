@@ -17,6 +17,7 @@ import {
   type OcrSegment,
 } from './ocrScoring';
 import { isBlurry } from './blurDetection';
+import { classifyPlusOrDivide } from './glyphCheck';
 
 export function ScanCalculator() {
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
@@ -156,7 +157,13 @@ export function ScanCalculator() {
           ? { x0: line.bbox.x0, y0: line.bbox.y0, x1: line.bbox.x1, y1: line.bbox.y1 }
           : undefined,
         symbols: (line.words ?? []).flatMap((word) =>
-          (word.symbols ?? []).map((symbol) => ({ text: symbol.text ?? '', confidence: symbol.confidence ?? 0 }))
+          (word.symbols ?? []).map((symbol) => ({
+            text: symbol.text ?? '',
+            confidence: symbol.confidence ?? 0,
+            bbox: symbol.bbox
+              ? { x0: symbol.bbox.x0, y0: symbol.bbox.y0, x1: symbol.bbox.x1, y1: symbol.bbox.y1 }
+              : undefined,
+          }))
         ),
       }))
       .filter((segment) => segment.text.trim().length > 0);
@@ -174,6 +181,71 @@ export function ScanCalculator() {
     out.height = height;
     out.getContext('2d')?.drawImage(source, x, y, width, height, 0, 0, width, height);
     return out;
+  };
+
+  /**
+   * Tesseract reads "÷" as "+" on phone photos, and the wrong operator
+   * silently evaluates "144÷12" as 156 instead of 12. For the winning
+   * candidate only: re-check each "+" glyph's pixels and swap in "/" where
+   * the shape says divide. Applied only when every "+" symbol maps 1:1 onto
+   * a "+" in the expression, so a partial match cannot corrupt the text.
+   *
+   * Symbol boxes come from the block pass over the preprocessed image, so the
+   * base canvas is the preprocessed one in every case (including 'crop').
+   */
+  const refinePlusOrDivide = (baseCanvas: HTMLCanvasElement, candidate: OcrCandidate | null): OcrCandidate | null => {
+    if (!candidate?.expression || !candidate.segment?.symbols) return candidate;
+    const plusSymbols = candidate.segment.symbols.filter((symbol) => symbol.text === '+');
+    const plusChars = (candidate.expression.match(/\+/g) ?? []).length;
+    if (plusSymbols.length === 0 || plusSymbols.length !== plusChars) return candidate;
+    if (plusSymbols.some((symbol) => !symbol.bbox)) return candidate;
+
+    const ctx = baseCanvas.getContext('2d');
+    if (!ctx) return candidate;
+
+    let expression = candidate.expression;
+    let changed = false;
+    let plusIndex = 0;
+    for (const symbol of plusSymbols) {
+      const bbox = symbol.bbox!;
+      const padX = Math.round((bbox.x1 - bbox.x0) * 0.15);
+      const padY = Math.round((bbox.y1 - bbox.y0) * 0.15);
+      const x = Math.max(0, bbox.x0 - padX);
+      const y = Math.max(0, bbox.y0 - padY);
+      const width = Math.max(1, Math.min(baseCanvas.width - x, bbox.x1 - bbox.x0 + 1 + padX * 2));
+      const height = Math.max(1, Math.min(baseCanvas.height - y, bbox.y1 - bbox.y0 + 1 + padY * 2));
+
+      let gray: ImageData;
+      try {
+        gray = ctx.getImageData(x, y, width, height);
+      } catch {
+        // Cross-origin canvases throw; fall back to the uncorrected reading.
+        return candidate;
+      }
+      if (classifyPlusOrDivide(gray) !== 'divide') {
+        plusIndex++;
+        continue;
+      }
+
+      // Replace the plusIndex-th "+" char with "/" (the cleaned form of "÷").
+      let seen = -1;
+      expression = expression.replace(/\+/g, () => {
+        seen++;
+        return seen === plusIndex ? '/' : '+';
+      });
+      changed = true;
+      plusIndex++;
+    }
+
+    if (!changed) return candidate;
+    const improved = {
+      ...candidate,
+      expression,
+      score: expressionScore(expression, candidate.confidence, expression),
+    };
+    // A "\u00f7" misread as a broken plus would turn into an expression that no
+    // longer parses; keep whichever reading scored better.
+    return improved.score >= candidate.score ? improved : candidate;
   };
 
   /** Run every OCR pass over a preprocessed image and return the best candidate. */
@@ -251,13 +323,12 @@ export function ScanCalculator() {
 
     // Last resort: one line over the whole image. Photos with a busy
     // background sometimes segment into fragments the block pass garbles.
-    if (!best || best.score < 25) {
-      const single = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_LINE });
+    if (!best || best.score < 25) {      const single = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_LINE });
       consider('fallback', single.data.text, passConfidence(single.data), false, ranked[0]);
       best = pickBestCandidate(candidates) ?? best;
     }
 
-    return best;
+    return refinePlusOrDivide(preprocessedCanvas, best);
   };
 
   const handleRecognize = async () => {

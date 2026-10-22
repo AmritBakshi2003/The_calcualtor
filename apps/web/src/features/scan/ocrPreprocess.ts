@@ -224,7 +224,7 @@ export function invertIfDark(imageData: ImageData): ImageData {
  *
  * Returns null when there is no ink, or ink is not the minority class.
  */
-function computeInkMask(imageData: ImageData): { mask: Uint8Array; count: number } | null {
+export function computeInkMask(imageData: ImageData): { mask: Uint8Array; count: number } | null {
   const { data, width, height } = imageData;
   if (width === 0 || height === 0) return null;
 

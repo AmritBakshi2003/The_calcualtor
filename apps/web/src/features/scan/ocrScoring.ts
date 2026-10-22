@@ -29,6 +29,8 @@ export interface BBox {
 export interface OcrSymbol {
   text: string;
   confidence: number;
+  /** Box in the image the recognition ran on, when Tesseract reports one. */
+  bbox?: BBox;
 }
 
 /** One line of OCR output, with geometry and confidence when available. */
