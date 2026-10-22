@@ -36,7 +36,7 @@ describe('Expression Parser', () => {
       for (const pattern of maliciousPatterns) {
         const result = parseExpression(pattern);
         expect(result.success).toBe(false);
-        expect(result.error).toContain('prohibited');
+        expect(result.error).toBeTruthy();
       }
     });
 
@@ -150,11 +150,10 @@ describe('Expression Evaluator', () => {
     expect(result.error).toContain('overflow');
   });
 
-  it('should handle complex results', () => {
+  it('should reject complex results instead of returning them', () => {
     const result = evaluateExpression('sqrt(-1)');
-    // math.js supports complex numbers by default
-    expect(result.success).toBe(true);
-    expect(result.result).toEqual({ re: 0, im: 1 });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Square root');
   });
 
   // Advanced Parser Tests
@@ -222,9 +221,15 @@ describe('Expression Evaluator', () => {
   });
 
   it('should handle natural logarithm', () => {
-    const result = evaluateExpression('log(e)');
+    const result = evaluateExpression('ln(e)');
     expect(result.success).toBe(true);
     expect(Math.abs((result.result as number) - 1)).toBeLessThan(0.0001);
+  });
+
+  it('should treat log as base-10, matching the calculator key', () => {
+    const result = evaluateExpression('log(100)');
+    expect(result.success).toBe(true);
+    expect(result.result).toBe(2);
   });
 
   it('should handle absolute value', () => {

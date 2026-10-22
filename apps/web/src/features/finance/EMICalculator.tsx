@@ -20,7 +20,10 @@ export function EMICalculator() {
     }
 
     const emiResult = calculateEMI({ principal: p, annualRate: r, tenureMonths: n });
-    const schedule = generateAmortizationSchedule({ principal: p, annualRate: r, tenureMonths: n });
+    const schedule = generateAmortizationSchedule(
+      { principal: p, annualRate: r, tenureMonths: n },
+      emiResult.emi
+    );
 
     setResult({ ...emiResult, schedule });
     setShowSchedule(false);

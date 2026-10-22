@@ -53,5 +53,10 @@ playwright/.cache/
 # TypeScript build cache
 *.tsbuildinfo
 
+# TypeScript emit accidentally written into source trees
+packages/*/src/**/*.js
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.d.ts.map
+
 # Tool-generated files
 .freebuff/

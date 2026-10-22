@@ -1,6 +1,13 @@
 // Expression parsing and evaluation
-export { parseExpression } from './expression/parser';
-export { evaluateExpression, evaluateSimple } from './expression/evaluator';
+export {
+  parseExpression,
+  MAX_EXPRESSION_LENGTH,
+  MAX_NESTING_DEPTH,
+  getAllowedFunctions,
+  getAllowedConstants,
+} from './expression/parser';
+export type { ParseResult, ParseOptions } from './expression/parser';
+export { evaluateExpression } from './expression/evaluator';
 export type { EvaluateResult, EvaluateOptions } from './expression/evaluator';
 export {
   validateNumberBounds,
@@ -43,15 +50,9 @@ export {
 } from './scientific/constants';
 
 // Finance functions
-export {
-  calculateEMI,
-  generateAmortizationSchedule,
-} from './finance/emi';
+export { calculateEMI, generateAmortizationSchedule } from './finance/emi';
 export type { EMIInput, EMIResult, AmortizationScheduleItem } from './finance/emi';
-export {
-  calculateSimpleInterest,
-  calculateCompoundInterest,
-} from './finance/interest';
+export { calculateSimpleInterest, calculateCompoundInterest } from './finance/interest';
 export type {
   SimpleInterestInput,
   SimpleInterestResult,
@@ -63,18 +64,16 @@ export type { SIPInput, SIPResult } from './finance/sip';
 export { calculateLumpSum, calculateCAGR } from './finance/growth';
 export type { LumpSumInput, LumpSumResult, CAGRInput, CAGRResult } from './finance/growth';
 export { calculateROI, calculateNPV, calculateIRR } from './finance/roi';
-export type { ROIInput, NPVInput, IRROptions, ROIResult, NPVResult, IRRResult } from './finance/roi';
-export {
-  calculateTax,
-  calculateDiscount,
-} from './finance/tax';
 export type {
-  TaxInput,
-  TaxResult,
-  TaxMode,
-  DiscountInput,
-  DiscountResult,
-} from './finance/tax';
+  ROIInput,
+  NPVInput,
+  IRROptions,
+  ROIResult,
+  NPVResult,
+  IRRResult,
+} from './finance/roi';
+export { calculateTax, calculateDiscount } from './finance/tax';
+export type { TaxInput, TaxResult, TaxMode, DiscountInput, DiscountResult } from './finance/tax';
 
 // Formatting functions
 export {

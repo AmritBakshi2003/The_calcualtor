@@ -1,13 +1,13 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
-import { evaluateExpression } from '@calculator-suite/math-core';
+import { evaluateExpression, MAX_EXPRESSION_LENGTH } from '@calculator-suite/math-core';
 import { AppError } from '../middleware/errorHandler.js';
 
 const router: Router = Router();
 
 // Validation schema for calculate request
 const calculateSchema = z.object({
-  expression: z.string().min(1).max(1000),
+  expression: z.string().min(1).max(MAX_EXPRESSION_LENGTH),
   angleMode: z.enum(['deg', 'rad']).optional(),
   lastAnswer: z.number().optional(),
 });

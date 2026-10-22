@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { SimpleCalculator } from './SimpleCalculator';
+import { useCalculatorStore } from '../../store';
+
+// History writes need IndexedDB, which jsdom does not provide.
+vi.mock('../../storage/db', () => ({
+  addHistoryEntry: vi.fn().mockResolvedValue(1),
+}));
 
 describe('SimpleCalculator', () => {
   it('renders calculator component', () => {
@@ -59,5 +65,32 @@ describe('SimpleCalculator', () => {
     expect(screen.getByLabelText('History')).toBeInTheDocument();
     expect(screen.getByLabelText('Unit Converter')).toBeInTheDocument();
     expect(screen.getByLabelText('Toggle Scientific')).toBeInTheDocument();
+  });
+
+  it('shows inverse trig results in degrees by default', async () => {
+    useCalculatorStore.setState({ angleMode: 'deg', showScientific: true, lastAnswer: null });
+    render(<SimpleCalculator />);
+
+    // Second operator set holds the inverse trig keys.
+    fireEvent.click(screen.getByLabelText('Swap operator set'));
+    fireEvent.click(screen.getByLabelText('sin⁻¹'));
+    fireEvent.click(screen.getByLabelText('1'));
+    fireEvent.click(screen.getByLabelText('Right parenthesis'));
+    fireEvent.click(screen.getByLabelText('Equals'));
+
+    expect(await screen.findByText('90')).toBeInTheDocument();
+  });
+
+  it('adds a percentage of the left operand', async () => {
+    useCalculatorStore.setState({ showScientific: false, lastAnswer: null });
+    render(<SimpleCalculator />);
+
+    for (const label of ['2', '0', '0', 'Add', '1', '0']) {
+      fireEvent.click(screen.getByLabelText(label));
+    }
+    fireEvent.click(screen.getByLabelText('Percent'));
+    fireEvent.click(screen.getByLabelText('Equals'));
+
+    expect(await screen.findByText('220')).toBeInTheDocument();
   });
 });

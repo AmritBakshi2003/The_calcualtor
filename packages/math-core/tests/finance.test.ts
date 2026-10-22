@@ -50,6 +50,64 @@ describe('Finance Calculations', () => {
       expect(schedule[0].month).toBe(1);
       expect(schedule[11].remainingBalance).toBe(0);
     });
+
+    it('should reconcile principal payments with the loan principal', () => {
+      const input = { principal: 100000, annualRate: 10, tenureMonths: 12 };
+      const schedule = generateAmortizationSchedule(input);
+
+      const totalPrincipal = schedule.reduce((sum, row) => sum + row.principalPayment, 0);
+      expect(totalPrincipal).toBeCloseTo(input.principal, 6);
+
+      // Every row pays off its own interest, so principal + interest is what is paid.
+      const totalPaid = schedule.reduce(
+        (sum, row) => sum + row.principalPayment + row.interestPayment,
+        0
+      );
+      expect(totalPaid).toBeCloseTo(calculateEMI(input).totalPayment, 4);
+    });
+
+    it('should let the final installment absorb the residual instead of zeroing it', () => {
+      const input = { principal: 1234567, annualRate: 8.75, tenureMonths: 37 };
+      const schedule = generateAmortizationSchedule(input);
+      const emi = calculateEMI(input).emi;
+      const lastRow = schedule[schedule.length - 1];
+
+      // The last installment differs from the others by the rounding residual only.
+      expect(Math.abs(lastRow.principalPayment + lastRow.interestPayment - emi)).toBeLessThan(0.01);
+      expect(lastRow.remainingBalance).toBe(0);
+
+      const totalPrincipal = schedule.reduce((sum, row) => sum + row.principalPayment, 0);
+      expect(totalPrincipal).toBeCloseTo(input.principal, 6);
+    });
+
+    it('should produce the same schedule when the EMI is supplied', () => {
+      const input = { principal: 250000, annualRate: 7.5, tenureMonths: 24 };
+      const emi = calculateEMI(input).emi;
+
+      expect(generateAmortizationSchedule(input, emi)).toEqual(generateAmortizationSchedule(input));
+    });
+
+    it('should reject invalid input instead of dividing by zero', () => {
+      expect(() => calculateEMI({ principal: 100000, annualRate: 10, tenureMonths: 0 })).toThrow(
+        'tenure'
+      );
+
+      expect(() => calculateEMI({ principal: 100000, annualRate: 10, tenureMonths: -12 })).toThrow(
+        'tenure'
+      );
+
+      expect(() => calculateEMI({ principal: 100000, annualRate: 10, tenureMonths: 12.5 })).toThrow(
+        'whole number'
+      );
+
+      expect(() => calculateEMI({ principal: -1000, annualRate: 10, tenureMonths: 12 })).toThrow(
+        'principal'
+      );
+
+      expect(() =>
+        calculateEMI({ principal: 1000, annualRate: Number.NaN, tenureMonths: 12 })
+      ).toThrow('rate');
+    });
   });
 
   describe('Simple Interest', () => {
@@ -148,7 +206,7 @@ describe('Finance Calculations', () => {
         tenureYears: 5,
       });
 
-      expect(cagr).toBeCloseTo(10, 1);
+      expect(cagr.cagr).toBeCloseTo(10, 1);
     });
 
     it('should throw error for zero start value', () => {
@@ -169,7 +227,7 @@ describe('Finance Calculations', () => {
         finalValue: 15000,
       });
 
-      expect(roi).toBe(50);
+      expect(roi.roi).toBe(50);
     });
 
     it('should handle loss', () => {
@@ -178,7 +236,7 @@ describe('Finance Calculations', () => {
         finalValue: 8000,
       });
 
-      expect(roi).toBe(-20);
+      expect(roi.roi).toBe(-20);
     });
   });
 
@@ -189,7 +247,7 @@ describe('Finance Calculations', () => {
         cashFlows: [-10000, 3000, 3000, 3000, 3000],
       });
 
-      expect(npv).toBeCloseTo(-490.40, 2);
+      expect(npv.npv).toBeCloseTo(-490.4, 2);
     });
   });
 
@@ -197,11 +255,55 @@ describe('Finance Calculations', () => {
     it('should calculate IRR', () => {
       const irr = calculateIRR([-10000, 3000, 3000, 3000, 3000]);
 
-      expect(irr).toBeCloseTo(7.71, 1);
+      expect(irr.irr).toBeCloseTo(7.71, 1);
     });
 
     it('should throw error for insufficient cash flows', () => {
       expect(() => calculateIRR([10000])).toThrow('IRR requires at least 2 cash flows');
+    });
+
+    it('should return a negative IRR for a loss-making project', () => {
+      // 1,000/yr against a 10,000 outlay over two years: IRR ≈ -62.98%.
+      const irr = calculateIRR([-10000, 1000, 1000]);
+
+      expect(irr.irr).toBeLessThan(0);
+      expect(irr.irr).toBeCloseTo(-62.98, 1);
+    });
+
+    it('should return an IRR of zero when flows exactly break even', () => {
+      const irr = calculateIRR([-1000, 500, 500]);
+      expect(irr.irr).toBeCloseTo(0, 6);
+    });
+
+    it('should honour an initial guess of zero', () => {
+      const withZeroGuess = calculateIRR([-10000, 3000, 3000, 3000, 3000], {
+        initialGuess: 0,
+      });
+      const withDefaultGuess = calculateIRR([-10000, 3000, 3000, 3000, 3000]);
+
+      expect(withZeroGuess.irr).toBeCloseTo(withDefaultGuess.irr, 6);
+    });
+
+    it('should converge for large cash flows (relative convergence)', () => {
+      const scale = 1e7; // e.g. crores instead of rupees
+      const irr = calculateIRR([
+        -10000 * scale,
+        3000 * scale,
+        3000 * scale,
+        3000 * scale,
+        3000 * scale,
+      ]);
+
+      expect(irr.irr).toBeCloseTo(7.71, 1);
+    });
+
+    it('should require both positive and negative cash flows', () => {
+      expect(() => calculateIRR([1000, 1000, 1000])).toThrow('both positive and negative');
+      expect(() => calculateIRR([-1000, -1000])).toThrow('both positive and negative');
+    });
+
+    it('should reject non-finite cash flows', () => {
+      expect(() => calculateIRR([-1000, Number.NaN, 500])).toThrow('finite');
     });
   });
 

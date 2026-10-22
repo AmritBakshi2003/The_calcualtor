@@ -18,9 +18,5 @@
     "composite": true
   },
   "include": [],
-  "references": [
-    { "path": "./apps/web" },
-    { "path": "./apps/api" },
-    { "path": "./packages/math-core" }
-  ]
+  "references": [{ "path": "./apps/web" }, { "path": "./apps/api" }]
 }

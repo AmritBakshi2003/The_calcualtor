@@ -50,15 +50,20 @@ export function formatNumberWithGrouping(
   const integerPart = parts[0];
   const decimalPart = parts[1] || '';
 
-  if (format === 'indian') {
-    // Indian grouping: 3,2,2,... (e.g., 1,00,000)
-    const grouped = integerPart.replace(/(\d)(?=(\d{2})+\d$)/g, '$1,');
-    return decimalPart ? `${grouped}.${decimalPart}` : grouped;
-  } else {
-    // Standard grouping: 3,3,3,... (e.g., 100,000)
-    const grouped = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    return decimalPart ? `${grouped}.${decimalPart}` : grouped;
-  }
+  // Group only the digits, then restore the sign: `-100000` must not become
+  // `-,1,00,000`.
+  const negative = integerPart.startsWith('-');
+  const digits = negative ? integerPart.slice(1) : integerPart;
+
+  const groupedDigits =
+    format === 'indian'
+      ? // Indian grouping: last three digits, then pairs (e.g., 10,00,000)
+        digits.replace(/(\d)(?=(\d{2})+\d$)/g, '$1,')
+      : // Standard grouping: 3,3,3,... (e.g., 100,000)
+        digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  const grouped = negative ? `-${groupedDigits}` : groupedDigits;
+  return decimalPart ? `${grouped}.${decimalPart}` : grouped;
 }
 
 /**

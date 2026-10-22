@@ -25,7 +25,6 @@
       "*": ["./*"]
     }
   },
-  "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"],
-  "references": [{ "path": "../../packages/math-core" }]
+  "include": ["src", "../../packages/math-core/src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }
