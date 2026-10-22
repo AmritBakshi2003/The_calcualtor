@@ -83,6 +83,21 @@ describe('cleanForEvaluation', () => {
     expect(cleanForEvaluation('200 * 10%')).toBe('200 * 10%');
   });
 
+  it('reads % between two operands as a misread multiplication', () => {
+    // "12.5%4" silently evaluated as modulo (0.5); OCR read "×" as "%"
+    expect(cleanForEvaluation('12.5%4')).toBe('12.5*4');
+    // the space before the operands survives cleaning
+    expect(cleanForEvaluation('12.5 % 4')).toMatch(/12\.5\*\s*4/);
+    expect(evaluateExpression(cleanForEvaluation('12.5%4')).result).toBe(50);
+  });
+
+  it('keeps percent signs that are not between two operands', () => {
+    expect(cleanForEvaluation('5%')).toBe('5%');
+    expect(cleanForEvaluation('50%')).toBe('50%');
+    expect(cleanForEvaluation('5%+3')).toBe('5%+3');
+    expect(cleanForEvaluation('0.5*%8')).toBe('0.5*8');
+  });
+
   it('produces input the real evaluator accepts for typical OCR output', () => {
     for (const raw of ['2+3=', '2+3=5', '1,000+5', '(2+3', '6 × 7', '2+3+']) {
       const result = evaluateExpression(cleanForEvaluation(raw));
