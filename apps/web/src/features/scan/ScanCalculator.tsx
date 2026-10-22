@@ -7,6 +7,7 @@ import { useOCRWorker, OCR_DEFAULT_PARAMS } from './useOCRWorker';
 import { preprocessForOCR } from './ocrPreprocess';
 import { postprocessOCR, cleanForEvaluation } from './ocrPostprocess';
 import {
+  WHITELIST_CONFIDENCE_FALLBACK,
   expressionScore,
   lowConfidenceSymbolCount,
   pickBestCandidate,
@@ -108,6 +109,8 @@ export function ScanCalculator() {
 
   interface PassOptions {
     psm?: Tesseract.PSM;
+    /** '' runs the pass WITHOUT the whitelist (it is the worker default). */
+    whitelist?: string;
   }
 
   const performOCR = async (imageData: string, options: PassOptions = {}): Promise<Tesseract.RecognizeResult> => {
@@ -115,6 +118,7 @@ export function ScanCalculator() {
 
     const overrides: Partial<Tesseract.WorkerParams> = {};
     if (options.psm !== undefined) overrides.tessedit_pageseg_mode = options.psm;
+    if (options.whitelist !== undefined) overrides.tessedit_char_whitelist = options.whitelist;
     const hasOverrides = Object.keys(overrides).length > 0;
 
     try {
@@ -135,6 +139,12 @@ export function ScanCalculator() {
 
   /** Raw OCR text -> expression the evaluator accepts. */
   const toExpression = (raw: string) => cleanForEvaluation(postprocessOCR(raw.trim()));
+
+  /** The confidence a recognize result reports, clamped to a sane range. */
+  const passConfidence = (data: Tesseract.RecognizeResult['data']): { text: string; confidence: number } => ({
+    text: data.text,
+    confidence: Math.max(0, Math.min(100, data.confidence ?? 0)),
+  });
 
   /** Tesseract's line segmentation -> segments we can rank and crop to. */
   const toSegments = (result: Tesseract.RecognizeResult): OcrSegment[] =>
@@ -172,30 +182,59 @@ export function ScanCalculator() {
     const preprocessedImageData = preprocessedCanvas.toDataURL('image/png');
 
     const candidates: OcrCandidate[] = [];
+    /** Confidence depending on whether the pass could actually report one. */
+    const honestConfidence = (
+      pass: { text: string; confidence: number },
+      confidenceKnown: boolean
+    ): { confidence: number; confidenceKnown: boolean } => {
+      const reads = pass.confidence > 0;
+      return {
+        confidence: reads ? pass.confidence : WHITELIST_CONFIDENCE_FALLBACK,
+        confidenceKnown: confidenceKnown && reads,
+      };
+    };
     const consider = (
       source: OcrCandidate['source'],
       raw: string,
-      confidence: number,
+      pass: { text: string; confidence: number },
+      confidenceKnown: boolean,
       segment?: OcrSegment
     ) => {
       const expression = toExpression(raw);
+      const honest = honestConfidence(pass, confidenceKnown);
       candidates.push({
         source,
         expression,
-        confidence,
+        confidence: honest.confidence,
+        confidenceKnown: honest.confidenceKnown,
         segment,
-        score: expressionScore(expression, confidence, raw),
+        score: expressionScore(expression, honest.confidence, raw),
       });
     };
 
-    // Block pass: also segments the image into lines, which is what lets us
-    // find the expression on a receipt or a screenshot full of other numbers.
+    // 1) Block pass, whitelist on: also segments the image into lines, which
+    // is what lets us find the expression on a receipt or a screenshot full of
+    // other numbers. Whitelist confidence is a reporting quirk (always 0) —
+    // see useOCRWorker.ts.
     const block = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_BLOCK });
     const ranked = rankSegments(toSegments(block));
 
-    consider('block', block.data.text, block.data.confidence, ranked[0]);
+    consider('block', block.data.text, passConfidence(block.data), false, ranked[0]);
     for (const line of ranked.slice(0, 3)) {
-      consider('line', line.text, line.confidence, line);
+      consider('line', line.text, { text: line.text, confidence: line.confidence }, false, line);
+    }
+
+    // 2) Block pass, whitelist off: real confidence, and the only pass that can
+    // emit glyphs outside OCR_WHITELIST ("2+3" reads as "iy" without one, but
+    // the matched-to-whitelist reading can also be wrong).
+    const blockOpen = await performOCR(preprocessedImageData, {
+      psm: Tesseract.PSM.SINGLE_BLOCK,
+      whitelist: '',
+    });
+    const rankedOpen = rankSegments(toSegments(blockOpen));
+    consider('block-open', blockOpen.data.text, passConfidence(blockOpen.data), true, rankedOpen[0]);
+    for (const line of rankedOpen.slice(0, 3)) {
+      consider('line-open', line.text, { text: line.text, confidence: line.confidence }, true, line);
     }
 
     // Re-read the winning line on its own: neighbouring text pulls the
@@ -205,7 +244,7 @@ export function ScanCalculator() {
       const cropResult = await performOCR(cropped.toDataURL('image/png'), {
         psm: Tesseract.PSM.SINGLE_LINE,
       });
-      consider('crop', cropResult.data.text, cropResult.data.confidence, ranked[0]);
+      consider('crop', cropResult.data.text, passConfidence(cropResult.data), false, ranked[0]);
     }
 
     let best = pickBestCandidate(candidates);
@@ -214,7 +253,7 @@ export function ScanCalculator() {
     // background sometimes segment into fragments the block pass garbles.
     if (!best || best.score < 25) {
       const single = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_LINE });
-      consider('fallback', single.data.text, single.data.confidence);
+      consider('fallback', single.data.text, passConfidence(single.data), false, ranked[0]);
       best = pickBestCandidate(candidates) ?? best;
     }
 
@@ -264,13 +303,17 @@ export function ScanCalculator() {
       }
 
       const processedText = best?.expression ?? '';
-      const lowCount = lowConfidenceSymbolCount(best?.segment);
+      // Whitelist passes report confidence 0 no matter how accurate the text
+      // was (= WHITELIST_CONFIDENCE_FALLBACK), so a score is only shown when
+      // the winning pass could actually measure one.
+      const confidenceKnown = best?.confidenceKnown ?? false;
+      const lowCount = confidenceKnown ? lowConfidenceSymbolCount(best?.segment) : 0;
       setLowConfidenceIndices(Array.from({ length: lowCount }, (_, i) => i));
 
       if (!editedWhileProcessingRef.current) {
         setRecognizedText(processedText);
         // A confidence score is meaningless when nothing was read.
-        setConfidence(processedText ? (best?.confidence ?? 0) : null);
+        setConfidence(processedText && confidenceKnown ? best?.confidence ?? null : null);
       }
 
       if (!processedText) {

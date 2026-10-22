@@ -41,13 +41,22 @@ export interface OcrSegment {
 
 export interface OcrCandidate {
   /** Where the text came from, kept for debugging and tests. */
-  source: 'block' | 'line' | 'crop' | 'fallback';
+  source: 'block' | 'line' | 'block-open' | 'line-open' | 'crop' | 'fallback';
   /** Text after cleanForEvaluation. */
   expression: string;
   confidence: number;
+  /** False when the pass's confidence is a reporting quirk (whitelist reads 0). */
+  confidenceKnown?: boolean;
   score: number;
   segment?: OcrSegment;
 }
+
+/**
+ * Confidence the scoring treats a whitelist pass as having. With a whitelist
+ * active Tesseract reports 0 for every word even when the text is right, so a
+ * 0 is replaced by this when ranking (but not displayed to the user).
+ */
+export const WHITELIST_CONFIDENCE_FALLBACK = 55;
 
 const DATE_LIKE = /^\s*\d{1,4}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,4}\s*$/;
 const CLOCK_LIKE = /^\s*\d{1,2}\s*[:.]\s*\d{2}\s*(?:[ap]m)?\s*$/i;
