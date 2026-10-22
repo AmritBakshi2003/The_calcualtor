@@ -144,6 +144,27 @@ describe('ScanCalculator editing', () => {
     expect(screen.getByLabelText(/recognized expression/i)).toBeTruthy();
   });
 
+  it('asks for an operator instead of evaluating digits split by a space', async () => {
+    // OCR reads one number as two: "2 3" must not be silently multiplied
+    worker.recognize.mockResolvedValue(ocrText('2 3'));
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('2 3'));
+    fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
+
+    expect(await screen.findByText(/missing operator between numbers - edit the box/i)).toBeTruthy();
+    expect(screen.queryByText('6')).toBeNull();
+  });
+
+  it('still solves thousands separators after the split-number guard', async () => {
+    worker.recognize.mockResolvedValue(ocrText('1,000+5'));
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('1000+5'));
+    fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
+    expect(await screen.findByText('1005')).toBeTruthy();
+  });
+
   it('trusts an accurate whitelist read at confidence 0 over a confident open read', async () => {
     // With the whitelist active Tesseract reports confidence 0 even when it
     // read the text right; the open pass may read garbage with high confidence

@@ -342,6 +342,14 @@ export function ScanCalculator() {
       return;
     }
 
+    // OCR often reads one number as two ("2 3"). The evaluator rejects that
+    // with a cryptic error, so explain what to fix instead of evaluating.
+    if (/\d\s+\d/.test(expression)) {
+      setError('Missing operator between numbers - edit the box');
+      setResult(null);
+      return;
+    }
+
     try {
       const evalResult = evaluateExpression(expression);
       if (evalResult.success) {
