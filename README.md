@@ -68,6 +68,10 @@ npm run test
 npm run install:e2e
 npm run test:e2e
 
+# OCR accuracy suite (renders a numeric image corpus and measures what the
+# Scan tab actually reads; writes test-results/ocr-report.json)
+npm run test:ocr
+
 # Type checking
 npm run typecheck
 ```
@@ -87,10 +91,42 @@ npm run typecheck
 3. For regular conversions: Select From and To units, enter value, press =
 4. For Tip calculator: Enter tip percentage and people count, enter bill amount, press =
 
+### Scanner (OCR)
+- Upload or capture an image of a printed expression, e.g. `12 + 34` or `2 x 45 = 90`
+- Recognition runs locally with Tesseract.js; nothing is uploaded
+- Multiple passes are ranked (block segmentation, per-line re-read of the line that
+  looks most like an expression, single-line fallback), so a date or a total on a
+  neighbouring line is not mistaken for the calculation
+- The recognized expression is editable — correct any misread digit before solving
+- Supported: printed digits, `+ - * / ^ ( ) . , %`, `x`/`×`/`÷` as operators,
+  calculator screens showing `expression = result`
+- Known limitation: the English model frequently reads `÷` as `+` or `=`; type the
+  operator manually when that happens
+
 ### Scientific Functions
 - Toggle between DEG (degrees) and RAD (radians) mode in the scientific section
 - DEG/RAD indicator only shows when scientific section is open
 - All trig functions respect the current angle mode
+
+### Expression Engine
+
+Expressions are parsed by `@calculator-suite/math-core` and evaluated from a validated
+syntax tree — never through a general-purpose evaluator.
+
+- **Grammar**: numbers (including `1.5e3`), `+ - * / ^`, implicit multiplication (`2pi`),
+  `!` for factorial, parentheses, the constants `pi`/`e`/`ans`, and the functions
+  `sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, asinh, acosh, atanh,
+  sqrt, cbrt, ln, log, log10, log2, exp, abs, round, floor, ceil, min, max, factorial, nCr`
+- **`log` is base 10**, `ln` is natural log
+- **Percent**: `200+10%` = 220, `200-10%` = 180, `200*10%` = 20, `50%` = 0.5;
+  `17 % 5` (two numbers) is still modulo = 2
+- **Angle mode**: `sin`/`cos`/`tan` take the selected angle mode; `asin`/`acos`/`atan`
+  return a value in that mode (so `asin(1)` is `90` in DEG and `1.5708` in RAD)
+- **Limits**: expressions are capped at 500 characters and 100 nesting levels
+- **Numbers only**: complex results, units and matrices are rejected with a message;
+  `sqrt(-1)`, `log(0)`, `factorial(-1)`, `tan(90°)` return domain errors
+- **Blocked**: assignment, property access, indexing, arrays/objects, and any function
+  outside the list above
 
 ## Deployment
 

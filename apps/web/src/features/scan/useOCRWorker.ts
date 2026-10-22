@@ -2,15 +2,15 @@ import { useEffect, useRef } from 'react';
 import Tesseract from 'tesseract.js';
 
 /**
- * Characters the default OCR pass is allowed to emit. `x`/`X` are included so a
- * printed multiplication sign is not forced into the nearest digit; postprocessing
- * turns it into `*`.
+ * Parameters the worker is returned to after any one-off pass.
+ *
+ * No `tessedit_char_whitelist` on purpose: with a whitelist active Tesseract
+ * reports a confidence of 0 for every word (so the UI always claimed "low
+ * confidence" and candidates could not be compared), and it forces unmatchable
+ * glyphs onto the nearest allowed character ("144 ÷ 12" became "144+12").
+ * Postprocessing narrows the text to arithmetic instead.
  */
-export const OCR_WHITELIST = '0123456789+-*/×÷().,=^%xX';
-
-/** Parameters the worker is returned to after any one-off pass. */
 export const OCR_DEFAULT_PARAMS = {
-  tessedit_char_whitelist: OCR_WHITELIST,
   tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
   // Without a DPI hint Tesseract guesses (and warns about) the resolution.
   user_defined_dpi: '300',

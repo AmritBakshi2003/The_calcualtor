@@ -10,8 +10,7 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "lint": "eslint src --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit",
-    "ocr:bench": "node --loader tsx scripts/ocrBenchmark.ts"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@calculator-suite/math-core": "file:../../packages/math-core",

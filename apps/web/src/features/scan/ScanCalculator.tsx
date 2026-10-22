@@ -5,7 +5,16 @@ import { CameraCapture } from './CameraCapture';
 import { CropEditor } from './CropEditor';
 import { useOCRWorker, OCR_DEFAULT_PARAMS } from './useOCRWorker';
 import { preprocessForOCR } from './ocrPreprocess';
-import { postprocessOCR, cleanForEvaluation, getKeptSymbolConfidences, findLowConfidenceIndices } from './ocrPostprocess';
+import { postprocessOCR, cleanForEvaluation } from './ocrPostprocess';
+import {
+  expressionScore,
+  lowConfidenceSymbolCount,
+  pickBestCandidate,
+  rankSegments,
+  type BBox,
+  type OcrCandidate,
+  type OcrSegment,
+} from './ocrScoring';
 import { isBlurry } from './blurDetection';
 
 export function ScanCalculator() {
@@ -23,6 +32,9 @@ export function ScanCalculator() {
   // so the edit box stays available for typing the expression manually.
   const [hasScanned, setHasScanned] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Set when the user edits while a recognition pass is still running; the
+  // result must not overwrite what they typed.
+  const editedWhileProcessingRef = useRef(false);
   const { getWorker } = useOCRWorker();
 
   // Guard against oversized uploads (the accept attribute is only a UI hint).
@@ -96,8 +108,6 @@ export function ScanCalculator() {
 
   interface PassOptions {
     psm?: Tesseract.PSM;
-    /** Pass '' to disable the character whitelist for this pass only. */
-    whitelist?: string;
   }
 
   const performOCR = async (imageData: string, options: PassOptions = {}): Promise<Tesseract.RecognizeResult> => {
@@ -105,7 +115,6 @@ export function ScanCalculator() {
 
     const overrides: Partial<Tesseract.WorkerParams> = {};
     if (options.psm !== undefined) overrides.tessedit_pageseg_mode = options.psm;
-    if (options.whitelist !== undefined) overrides.tessedit_char_whitelist = options.whitelist;
     const hasOverrides = Object.keys(overrides).length > 0;
 
     try {
@@ -127,6 +136,36 @@ export function ScanCalculator() {
   /** Raw OCR text -> expression the evaluator accepts. */
   const toExpression = (raw: string) => cleanForEvaluation(postprocessOCR(raw.trim()));
 
+  /** Tesseract's line segmentation -> segments we can rank and crop to. */
+  const toSegments = (result: Tesseract.RecognizeResult): OcrSegment[] =>
+    (result.data.lines ?? [])
+      .map((line) => ({
+        text: line.text ?? '',
+        confidence: line.confidence ?? 0,
+        bbox: line.bbox
+          ? { x0: line.bbox.x0, y0: line.bbox.y0, x1: line.bbox.x1, y1: line.bbox.y1 }
+          : undefined,
+        symbols: (line.words ?? []).flatMap((word) =>
+          (word.symbols ?? []).map((symbol) => ({ text: symbol.text ?? '', confidence: symbol.confidence ?? 0 }))
+        ),
+      }))
+      .filter((segment) => segment.text.trim().length > 0);
+
+  /** Copy one line out of the preprocessed canvas, with breathing room. */
+  const cropToBbox = (source: HTMLCanvasElement, bbox: BBox): HTMLCanvasElement => {
+    const pad = Math.max(6, Math.round((bbox.y1 - bbox.y0) * 0.6));
+    const x = Math.max(0, bbox.x0 - pad);
+    const y = Math.max(0, bbox.y0 - pad);
+    const width = Math.max(1, Math.min(source.width - x, bbox.x1 - bbox.x0 + pad * 2));
+    const height = Math.max(1, Math.min(source.height - y, bbox.y1 - bbox.y0 + pad * 2));
+
+    const out = document.createElement('canvas');
+    out.width = width;
+    out.height = height;
+    out.getContext('2d')?.drawImage(source, x, y, width, height, 0, 0, width, height);
+    return out;
+  };
+
   const handleRecognize = async () => {
     if (!capturedImage) {
       setError('Please capture or upload an image first');
@@ -134,6 +173,7 @@ export function ScanCalculator() {
     }
 
     setIsProcessing(true);
+    editedWhileProcessingRef.current = false;
     setError(null);
     setBlurWarning(false);
     setLowConfidenceIndices([]);
@@ -160,54 +200,62 @@ export function ScanCalculator() {
       // PNG (lossless) preserves crisp digit edges; JPEG artifacts degrade OCR.
       const preprocessedImageData = preprocessedCanvas.toDataURL('image/png');
 
-      // First OCR pass
-      let result = await performOCR(preprocessedImageData);
-      let processedText = toExpression(result.data.text);
+      const candidates: OcrCandidate[] = [];
+      const consider = (
+        source: OcrCandidate['source'],
+        raw: string,
+        confidence: number,
+        segment?: OcrSegment
+      ) => {
+        const expression = toExpression(raw);
+        candidates.push({
+          source,
+          expression,
+          confidence,
+          segment,
+          score: expressionScore(expression, confidence, raw),
+        });
+      };
 
-      // Check if we need retry (low confidence or doesn't parse)
-      const confidence = result.data.confidence || 0;
-      let evalResult = evaluateExpression(processedText);
+      // Block pass: also segments the image into lines, which is what lets us
+      // find the expression on a receipt or a screenshot full of other numbers.
+      const block = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_BLOCK });
+      const ranked = rankSegments(toSegments(block));
 
-      if (confidence < 70 || !evalResult.success) {
-        // Retry with single block mode
-        const retryResult = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_BLOCK });
-        const retryText = toExpression(retryResult.data.text);
-        const retryEval = evaluateExpression(retryText);
-
-        // Pick the best result (prefer one that parses)
-        if (retryEval.success && !evalResult.success) {
-          result = retryResult;
-          processedText = retryText;
-          evalResult = retryEval;
-        } else if (retryEval.success && evalResult.success) {
-          // Both parse, pick higher confidence
-          if (retryResult.data.confidence > result.data.confidence) {
-            result = retryResult;
-            processedText = retryText;
-            evalResult = retryEval;
-          }
-        }
+      consider('block', block.data.text, block.data.confidence, ranked[0]);
+      for (const line of ranked.slice(0, 3)) {
+        consider('line', line.text, line.confidence, line);
       }
 
-      // Last resort: the whitelist forces unreadable glyphs into the nearest
-      // allowed character (often a wrong digit). If nothing parsed yet, read
-      // once more without it and let postprocessing map look-alike letters.
-      if (!evalResult.success) {
-        const openResult = await performOCR(preprocessedImageData, { whitelist: '' });
-        const openText = toExpression(openResult.data.text);
-        if (evaluateExpression(openText).success) {
-          result = openResult;
-          processedText = openText;
-        }
+      // Re-read the winning line on its own: neighbouring text pulls the
+      // recognizer towards the wrong glyphs even when segmentation was right.
+      if (ranked.length > 1 && ranked[0].bbox) {
+        const cropped = cropToBbox(preprocessedCanvas, ranked[0].bbox);
+        const cropResult = await performOCR(cropped.toDataURL('image/png'), {
+          psm: Tesseract.PSM.SINGLE_LINE,
+        });
+        consider('crop', cropResult.data.text, cropResult.data.confidence, ranked[0]);
       }
 
-      // Character-level confidences (only symbols that survive postprocessing)
-      const charConfidences = getKeptSymbolConfidences(result);
-      const lowIndices = findLowConfidenceIndices(charConfidences, 60);
-      setLowConfidenceIndices(lowIndices);
+      let best = pickBestCandidate(candidates);
 
-      setRecognizedText(processedText);
-      setConfidence(result.data.confidence || 0);
+      // Last resort: one line over the whole image. Photos with a busy
+      // background sometimes segment into fragments the block pass garbles.
+      if (!best || best.score < 25) {
+        const single = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_LINE });
+        consider('fallback', single.data.text, single.data.confidence);
+        best = pickBestCandidate(candidates) ?? best;
+      }
+
+      const processedText = best?.expression ?? '';
+      const lowCount = lowConfidenceSymbolCount(best?.segment);
+      setLowConfidenceIndices(Array.from({ length: lowCount }, (_, i) => i));
+
+      if (!editedWhileProcessingRef.current) {
+        setRecognizedText(processedText);
+        // A confidence score is meaningless when nothing was read.
+        setConfidence(processedText ? (best?.confidence ?? 0) : null);
+      }
 
       if (!processedText) {
         setError('No text detected. Type the expression below, crop closer to it, or retake the photo.');
@@ -370,6 +418,7 @@ export function ScanCalculator() {
                 value={recognizedText}
                 onChange={(e) => {
                   // Editing invalidates the previous result, error and highlights
+                  if (isProcessing) editedWhileProcessingRef.current = true;
                   setRecognizedText(e.target.value);
                   setResult(null);
                   setError(null);
@@ -378,10 +427,17 @@ export function ScanCalculator() {
                 spellCheck={false}
                 autoCapitalize="off"
                 autoCorrect="off"
-                className="w-full p-3 sm:p-4 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-xs sm:text-sm"
-                rows={3}
+                autoComplete="off"
+                aria-describedby="recognized-expression-hint"
+                // 16px keeps iOS Safari from zooming the page when the box is
+                // focused — without it, correcting a digit is almost unusable.
+                className="w-full p-3 sm:p-4 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-base sm:text-sm leading-relaxed"
+                rows={2}
                 placeholder="Recognized expression will appear here"
               />
+              <p id="recognized-expression-hint" className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Tap the box to correct a misread digit before solving.
+              </p>
               {confidence !== null && (
                 <div className="mt-1 sm:mt-2 text-xs sm:text-sm">
                   <span className={`font-medium ${confidence < 70 ? 'text-yellow-600 dark:text-yellow-400' : 'text-green-600 dark:text-green-400'}`}>

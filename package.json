@@ -30,7 +30,8 @@
     "typecheck": "npm run typecheck:core && npm run typecheck:web && npm run typecheck:api",
     "typecheck:core": "cd packages/math-core && npm run typecheck",
     "typecheck:web": "cd apps/web && npm run typecheck",
-    "typecheck:api": "cd apps/api && npm run typecheck"
+    "typecheck:api": "cd apps/api && npm run typecheck",
+    "test:ocr": "playwright test e2e/ocr-accuracy.spec.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.40.0",

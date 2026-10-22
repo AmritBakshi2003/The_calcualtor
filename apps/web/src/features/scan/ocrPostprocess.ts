@@ -3,6 +3,8 @@
  * Normalize Unicode operators and common OCR misreads
  */
 
+import { textShapeScore } from './ocrScoring';
+
 /**
  * Character substitution mappings for common OCR errors
  */
@@ -29,10 +31,6 @@ const SUBSTITUTIONS: Record<string, string> = {
  */
 const DIGIT_LOOKALIKES = 'OolI|SsB';
 
-function isDigitLike(char: string): boolean {
-  return /[0-9]/.test(char) || (char !== '' && DIGIT_LOOKALIKES.includes(char));
-}
-
 /**
  * True when an x/X sits between two operands, i.e. it is a multiplication sign
  * ("2x3", "2 x 3", "(1+2)x4"). Without this, "2x3" lost its operator and was
@@ -45,24 +43,26 @@ function isMultiplicationX(text: string, index: number): boolean {
 }
 
 /**
- * Check if a character is in a digit position (safe to substitute)
- * This is a heuristic: positions next to operators, boundaries, or other
- * digit-like characters. Neighbouring digits count too: in "1O5" the O must
- * become 0, not be dropped (which silently changed 105 into 15).
+ * Check if a character is in a digit position (safe to substitute).
+ *
+ * A look-alike letter counts as a digit when its whole token contains a digit
+ * ("1O5", "2S3") or when it stands alone between operators ("O + 2"). Being at
+ * a token boundary is NOT enough: that turned the word "Order" into "0rder",
+ * so a receipt line lost its text and produced an unparsable expression.
  */
 function isDigitPosition(text: string, index: number): boolean {
   const char = text[index];
-  const prev = text[index - 1] || '';
-  const next = text[index + 1] || '';
-
-  // Character is already a digit
   if (/[0-9]/.test(char)) return true;
 
-  const operators = '+-*/×÷^().,= ';
-  const isPrevOperator = prev === '' || operators.includes(prev);
-  const isNextOperator = next === '' || operators.includes(next);
+  let start = index;
+  let end = index;
+  while (start > 0 && !/\s/.test(text[start - 1])) start--;
+  while (end < text.length - 1 && !/\s/.test(text[end + 1])) end++;
 
-  return isPrevOperator || isNextOperator || isDigitLike(prev) || isDigitLike(next);
+  const token = text.slice(start, end + 1);
+  if (/[0-9]/.test(token)) return true;
+
+  return token.length === 1 && (DIGIT_LOOKALIKES.includes(char) || SUBSTITUTIONS[char] !== undefined);
 }
 
 /**
@@ -173,13 +173,18 @@ export function findLowConfidenceIndices(confidences: number[], threshold: numbe
  *  - "2+3+" / "2+("    -> "2+3" / "2"  (dangling operator)
  *  - "(2+3"            -> "(2+3)"      (missing closing parenthesis)
  *  - "×" "÷" "−"       -> "*" "/" "-"  (also when typed by the user)
- * Multi-line input uses the first line that contains a digit.
+ * Multi-line input uses the line that looks most like an expression. Picking the
+ * first line with a digit is not enough: a date or a price on the line above the
+ * expression would win, and "12/03/2025" even evaluates as a division.
  */
 export function cleanForEvaluation(text: string): string {
   if (!text) return '';
 
-  const line = text.split(/\r?\n/).find((l) => /[0-9]/.test(l)) ?? '';
-  let s = normalizeOperators(line);
+  const lines = text.split(/\r?\n/).filter((l) => /[0-9]/.test(l));
+  const line = pickExpressionLine(lines);
+  // Also handle text typed straight into the edit box (no postprocessOCR run):
+  // "2x3" must not reach the evaluator as a symbol named x.
+  let s = normalizeOperators(line).replace(/(\d)\s*[xX]\s*(?=[\d(.])/g, '$1*');
 
   // Keep the first non-empty segment around "=" ("2+3=5" -> "2+3", "= 2+3" -> "2+3")
   s = s.split('=').map((part) => part.trim()).find((part) => part.length > 0) ?? '';
@@ -191,6 +196,10 @@ export function cleanForEvaluation(text: string): string {
   s = s.replace(/(\d),(\d)/g, '$1.$2').replace(/,/g, '');
 
   s = s.replace(/\s+/g, ' ').trim();
+
+  // A percent sign is only meaningful after a number. OCR inserts one where a
+  // small glyph (often the dot of "=") sat next to an operator: "0.5*%8" -> "0.5*8".
+  s = s.replace(/([+\-*/^(])\s*%/g, '$1').replace(/^%+/, '');
 
   // Dangling operators / open parenthesis at the end, and operators that cannot start an expression
   s = s.replace(/[\s+\-*/^.(]+$/, '');
@@ -208,6 +217,24 @@ export function cleanForEvaluation(text: string): string {
     balanced += ch;
   }
   return balanced + ')'.repeat(depth);
+}
+
+/**
+ * Choose the line most likely to be the expression the user pointed at.
+ * Ties keep document order so predictable input stays predictable. */
+function pickExpressionLine(lines: string[]): string {
+  if (lines.length <= 1) return lines[0] ?? '';
+
+  let best = lines[0];
+  let bestScore = textShapeScore(best);
+  for (const line of lines.slice(1)) {
+    const score = textShapeScore(line);
+    if (score > bestScore) {
+      best = line;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 /**

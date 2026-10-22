@@ -13,7 +13,12 @@ describe('postprocessOCR (digit-neighbour fixes)', () => {
     expect(postprocessOCR('1O5')).toBe('105');
     expect(postprocessOCR('1l5+2')).toBe('115+2');
     expect(postprocessOCR('5S3')).toBe('553');
-    expect(postprocessOCR('OOO')).toBe('000');
+  });
+
+  it('does not turn a word into digits just because it starts with a look-alike', () => {
+    // "Order 90.00" must keep its number intact instead of becoming "0rder"
+    expect(postprocessOCR('Order 90.00')).toBe('90.00');
+    expect(postprocessOCR('SALE 1O5')).toBe('105');
   });
 });
 
@@ -45,8 +50,37 @@ describe('cleanForEvaluation', () => {
     });
   });
 
-  it('uses the first line containing a digit for multi-line input', () => {
+  it('uses the first line containing a digit when scores tie', () => {
     expect(cleanForEvaluation('\n2+3\n4*5')).toBe('2+3');
+  });
+
+  // The app always runs postprocessOCR first; these mirror that pipeline.
+  const pipeline = (raw: string) => cleanForEvaluation(postprocessOCR(raw));
+
+  it('skips a date line above the expression', () => {
+    expect(pipeline('12/03/2025\n2 x 45 = 90')).toBe('2 * 45');
+  });
+
+  it('skips a price line above the expression', () => {
+    expect(pipeline('TOTAL 90.00\n2 x 45 = 90')).toBe('2 * 45');
+  });
+
+  it('falls back to the only numeric line when nothing looks like an expression', () => {
+    expect(pipeline('Order 90.00')).toBe('90.00');
+  });
+
+  it('accepts "x" as multiplication when typed straight into the edit box', () => {
+    expect(cleanForEvaluation('2x3')).toBe('2*3');
+    expect(cleanForEvaluation('2 x 3')).toBe('2*3');
+  });
+
+  it('drops a percent sign OCR inserted after an operator', () => {
+    expect(cleanForEvaluation('0.5*%8=')).toBe('0.5*8');
+    expect(cleanForEvaluation('%12+3')).toBe('12+3');
+  });
+
+  it('keeps a percent sign that follows a number', () => {
+    expect(cleanForEvaluation('200 * 10%')).toBe('200 * 10%');
   });
 
   it('produces input the real evaluator accepts for typical OCR output', () => {

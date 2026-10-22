@@ -43,8 +43,8 @@ test.describe('OCR/Scanner Tests', () => {
     await expect(fileInput).toHaveCount(2);
   });
 
-  // Note: Full OCR accuracy tests with 20 test images are deferred
-  // They require a test image dataset with known expressions
-  // Target: >85% accuracy on printed arithmetic
+  // Accuracy against a generated numeric corpus lives in ocr-accuracy.spec.ts
+  // (npm run test:ocr). It renders the images in the browser, so no binary
+  // fixtures are checked in.
 });
 
