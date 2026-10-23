@@ -352,6 +352,104 @@ function resizeCanvas(canvas: HTMLCanvasElement, scale: number): HTMLCanvasEleme
 }
 
 /**
+ * Median horizontal ink-run length inside text bands, divided by the median
+ * band height: how thin the strokes are relative to the text size. Thin
+ * (regular / monospace) weights resample into broken strokes that Tesseract
+ * reads as wrong digits ("123+456" -> "131156", "100-1" -> "160-1").
+ * Pure; returns null when there is no text to measure.
+ */
+export function strokeWidthRatio(imageData: ImageData): number | null {
+  const ink = computeInkMask(imageData);
+  if (!ink) return null;
+
+  const { width, height } = imageData;
+  const minInkPerRow = Math.max(2, Math.floor(width * 0.002));
+
+  // Text bands, same rule as estimateInkHeight.
+  const inBand = new Uint8Array(height);
+  const bandHeights: number[] = [];
+  let run = 0;
+  for (let y = 0; y < height; y++) {
+    let count = 0;
+    const rowStart = y * width;
+    for (let x = 0; x < width; x++) count += ink.mask[rowStart + x];
+    if (count >= minInkPerRow) {
+      inBand[y] = 1;
+      run++;
+    } else if (run > 0) {
+      bandHeights.push(run);
+      run = 0;
+    }
+  }
+  if (run > 0) bandHeights.push(run);
+
+  const substantial = bandHeights.filter((b) => b >= 3);
+  const heights = (substantial.length > 0 ? substantial : bandHeights).sort((a, b) => a - b);
+  if (heights.length === 0) return null;
+  const bandHeight = heights[Math.floor(heights.length / 2)];
+
+  // Median horizontal ink run across those band rows.
+  const runs: number[] = [];
+  for (let y = 0; y < height; y++) {
+    if (!inBand[y]) continue;
+    const rowStart = y * width;
+    let x = 0;
+    while (x < width) {
+      if (ink.mask[rowStart + x]) {
+        let len = 1;
+        while (x + len < width && ink.mask[rowStart + x + len]) len++;
+        runs.push(len);
+        x += len;
+      } else {
+        x++;
+      }
+    }
+  }
+  if (runs.length === 0) return null;
+  runs.sort((a, b) => a - b);
+  return runs[Math.floor(runs.length / 2)] / bandHeight;
+}
+
+/**
+ * Darken strokes by one pixel: a 3x3 minimum filter on dark-on-light
+ * grayscale (low value = ink, so the minimum expands ink outward). One pass
+ * only — enough to carry a 1-2px anti-aliased stroke through resampling
+ * without merging neighbouring glyphs. Mutates and returns the image.
+ */
+export function thickenStrokes(imageData: ImageData): ImageData {
+  const { data, width, height } = imageData;
+  const gray = new Uint8Array(width * height);
+  for (let p = 0, i = 0; p < width * height; p++, i += 4) gray[p] = data[i];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let min = 255;
+      for (let dy = -1; dy <= 1; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= height) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= width) continue;
+          const v = gray[ny * width + nx];
+          if (v < min) min = v;
+        }
+      }
+      const i = (y * width + x) * 4;
+      data[i] = data[i + 1] = data[i + 2] = min;
+    }
+  }
+  return imageData;
+}
+
+/**
+ * Stroke ratio below which the text counts as "thin" and gets the thickening
+ * treatment. Measured on screen-photo-like input: Roboto Bold renders at
+ * 0.20-0.23 while Roboto Mono and Open Sans render at 0.12-0.16, so 0.16
+ * separates the thin families from bold without touching bold text.
+ */
+export const THIN_STROKE_RATIO = 0.16;
+
+/**
  * Scale the canvas when its text is clearly too small or too large (see
  * `computeOCRScale`). Scales up OR down, and never exceeds the size caps.
  */
@@ -533,7 +631,12 @@ export function preprocessForOCR(canvas: HTMLCanvasElement): HTMLCanvasElement {
   const cropCtx = cropped.getContext('2d');
   if (cropCtx) {
     const stretched = contrastStretch(cropCtx.getImageData(0, 0, cropped.width, cropped.height));
-    cropCtx.putImageData(stretched, 0, 0);
+    // Thin strokes get one minimum-filter pass BEFORE scaling: resampling a
+    // 1-2px anti-aliased stroke breaks it into fragments Tesseract reads as
+    // wrong digits. Bold text (ratio above THIN_STROKE_RATIO) is untouched.
+    const ratio = strokeWidthRatio(stretched);
+    const thinned = ratio !== null && ratio < THIN_STROKE_RATIO;
+    cropCtx.putImageData(thinned ? thickenStrokes(stretched) : stretched, 0, 0);
   }
 
   // Scale BEFORE adding the border: a bright border skews the local paper

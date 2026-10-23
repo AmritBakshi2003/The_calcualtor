@@ -7,6 +7,8 @@ import {
   findInkBounds,
   invertIfDark,
   otsuThreshold,
+  strokeWidthRatio,
+  thickenStrokes,
 } from './ocrPreprocess';
 
 /** Build a grayscale ImageData from a per-pixel function. */
@@ -153,6 +155,42 @@ describe('contrastStretch', () => {
     const paper = out.data[(90 * 100 + 10) * 4];
     expect(shadow).toBeGreaterThan(150); // old 2% clip drove this to 0
     expect(paper).toBe(255);
+  });
+});
+
+describe('strokeWidthRatio', () => {
+  it('measures median run length relative to the text band height', () => {
+    // stroke(x) gives 3px runs inside a 40px band -> 3/40
+    expect(strokeWidthRatio(textLine(300, 100, 30, 40))).toBeCloseTo(3 / 40, 5);
+  });
+
+  it('measures clearly thicker strokes as a higher ratio', () => {
+    const bold = makeImage(300, 100, (x, y) =>
+      y >= 30 && y < 70 && x > 10 && x < 290 && x % 8 < 6 ? 20 : 240
+    );
+    expect(strokeWidthRatio(bold)!).toBeGreaterThan(strokeWidthRatio(textLine(300, 100, 30, 40))!);
+  });
+
+  it('returns null for a blank image', () => {
+    expect(strokeWidthRatio(makeImage(50, 50, () => 255))).toBeNull();
+  });
+});
+
+describe('thickenStrokes', () => {
+  it('expands a 1px dark stroke by one pixel on each side', () => {
+    const line = makeImage(30, 30, (x) => (x === 15 ? 20 : 240));
+    const out = thickenStrokes(line);
+    expect(out.data[(15 * 30 + 14) * 4]).toBe(20); // neighbour column becomes ink
+    expect(out.data[(15 * 30 + 16) * 4]).toBe(20);
+    expect(out.data[(15 * 30 + 12) * 4]).toBe(240); // two away stays paper
+    expect(out.data[(15 * 30 + 15) * 4]).toBe(20); // the stroke itself is kept
+  });
+
+  it('leaves a blank image blank', () => {
+    const blank = makeImage(20, 20, () => 240);
+    const out = thickenStrokes(blank);
+    expect(out.data[0]).toBe(240);
+    expect(out.data[(19 * 20 + 19) * 4]).toBe(240);
   });
 });
 
