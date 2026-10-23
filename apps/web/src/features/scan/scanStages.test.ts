@@ -4,6 +4,8 @@ import {
   applyStageEvent,
   applyStageEvents,
   initialStages,
+  serverStagesToEvents,
+  type StageState,
 } from './scanStages';
 
 describe('scanStages', () => {
@@ -72,5 +74,48 @@ describe('scanStages', () => {
       detail: 'not configured',
     });
     expect(stages.find((s) => s.id === 'prepare')?.state).toBe('done');
+  });
+});
+
+describe('serverStagesToEvents', () => {
+  it('marks the cache and compare rows done; consensus leaves Gemini untouched', () => {
+    const events = serverStagesToEvents(['cache:miss', 'decide:consensus']);
+    expect(events).toEqual([
+      { stage: 'cache', state: 'done', detail: undefined },
+      { stage: 'compare', state: 'done', detail: undefined },
+    ]);
+  });
+
+  it('labels a cache hit', () => {
+    const events = serverStagesToEvents(['cache:hit', 'decide:consensus']);
+    expect(events[0]).toEqual({ stage: 'cache', state: 'done', detail: 'served from cache' });
+  });
+
+  it('maps each arbiter outcome onto the Gemini row', () => {
+    const cases: Array<[string, StageState, string?]> = [
+      ['arbiter:gemini-3.5-flash-lite:match', 'done', 'confirmed the reading'],
+      ['arbiter:gemini-3.8-flash:no_match', 'done', 'reviewed — no agreement'],
+      ['arbiter:gemini-3.5-flash-lite:429:busy', 'skipped', 'Gemini is busy — try again shortly.'],
+      ['arbiter:skipped:busy', 'skipped', 'Gemini is busy — try again shortly.'],
+      ['arbiter:skipped:daily_cap', 'skipped', 'Gemini daily limit reached.'],
+      ['arbiter:skipped:not_configured', 'skipped', 'Gemini is not configured.'],
+      ['arbiter:skipped:image_too_large', 'skipped', 'image too large for review'],
+      ['arbiter:gemini-3.8-flash:error', 'failed', 'Gemini review failed.'],
+      ['arbiter:gemini-3.5-flash-lite:parse_failed', 'failed', 'review answer unreadable'],
+    ];
+    for (const [serverStage, state, detail] of cases) {
+      const events = serverStagesToEvents(['cache:miss', 'decide:needs_arbiter', serverStage]);
+      expect(events[2]).toEqual({ stage: 'gemini', state, detail });
+    }
+  });
+
+  it('the LAST arbiter string is the final outcome', () => {
+    const events = serverStagesToEvents([
+      'cache:miss',
+      'decide:needs_arbiter',
+      'arbiter:gemini-3.5-flash-lite:no_match',
+      'arbiter:gemini-3.8-flash:match',
+    ]);
+    expect(events[2]).toMatchObject({ state: 'done', detail: 'confirmed the reading' });
   });
 });

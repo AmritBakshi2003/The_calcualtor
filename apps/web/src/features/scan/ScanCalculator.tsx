@@ -16,10 +16,25 @@ import { isBlurry } from './blurDetection';
 import {
   fetchGeminiCapabilities,
   GeminiUnavailableError,
-  recognizeWithGemini,
   solveWithGemini,
 } from './geminiClient';
 import { assessComplexity, findUnknownWord } from './complexity';
+import {
+  applyStageEvent,
+  applyStageEvents,
+  initialStages,
+  serverStagesToEvents,
+  type ScanStage,
+  type StageId,
+  type StageState,
+} from './scanStages';
+import { StageList } from './StageList';
+import {
+  ocrSpaceMessage,
+  requestConsensus,
+  requestOcrSpace,
+  type ConsensusClientResult,
+} from './scanEngineClient';
 
 export function ScanCalculator() {
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
@@ -33,26 +48,19 @@ export function ScanCalculator() {
   const [lowConfidenceIndices, setLowConfidenceIndices] = useState<number[]>([]);
   const [showCropEditor, setShowCropEditor] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
-  // Ambiguous characters the winning pass auto-corrected ("O"→"0"), shown as
-  // a warning instead of hiding the correction silently.
-  const [ambiguousCorrections, setAmbiguousCorrections] = useState<string[]>([]);
   // True once a recognition attempt has finished (even an empty or failed one),
   // so the edit box stays available for typing the expression manually.
   const [hasScanned, setHasScanned] = useState(false);
   // Same-origin Gemini API availability (null = probe still running).
   const [geminiEnabled, setGeminiEnabled] = useState<boolean | null>(null);
-  // Which engine produced the recognized text: 'gemini' (cross-validated),
-  // 'local', or null (nothing recognized yet).
-  const [recognitionSource, setRecognitionSource] = useState<'gemini' | 'local' | null>(null);
-  // True when Gemini and Tesseract returned different readings for the same
-  // scan — the user must verify before trusting either.
-  const [engineDisagreement, setEngineDisagreement] = useState(false);
-  // Degradation notice when the Gemini call did not succeed (missing key,
-  // rate limit, offline). Local recognition continues to carry the scan.
-  const [geminiMessage, setGeminiMessage] = useState<string | null>(null);
-  // False when Gemini read something but its independent verification pass
-  // could not confirm it against the ink — the result ships but is flagged.
-  const [geminiVerified, setGeminiVerified] = useState(false);
+  // Phase-4 progress: pipeline stages + the consensus verdict.
+  const [stages, setStages] = useState<ScanStage[]>(initialStages);
+  // Verification state from the consensus route (null = not scanned / unavailable).
+  const [scanMeta, setScanMeta] = useState<{
+    verified: boolean | null;
+    sources: string[];
+    alternatives: string[];
+  } | null>(null);
   // True while a Gemini solve call is in flight.
   const [geminiBusy, setGeminiBusy] = useState(false);
   // True when the displayed result was computed by Gemini (complex question).
@@ -80,13 +88,14 @@ export function ScanCalculator() {
     setError(null);
     setBlurWarning(false);
     setLowConfidenceIndices([]);
-    setAmbiguousCorrections([]);
-    setGeminiMessage(null);
-    setEngineDisagreement(false);
-    setRecognitionSource(null);
     setSolvedByGemini(false);
-    setGeminiVerified(false);
+    setStages(initialStages());
+    setScanMeta(null);
   };
+
+  /** Emit one pipeline stage event (Phase 4 progress UI). */
+  const emitStage = (stage: StageId, state: StageState, detail?: string) =>
+    setStages((prev) => applyStageEvent(prev, { stage, state, detail }));
 
   // Guard against oversized uploads (the accept attribute is only a UI hint).
   const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15MB
@@ -156,6 +165,15 @@ export function ScanCalculator() {
   /** Raw OCR text -> expression the evaluator accepts. */
   const toExpression = (raw: string) => cleanForEvaluation(postprocessOCR(raw.trim()));
 
+  /** Consensus source label -> a short engine name for the chip row. */
+  const friendlyEngine = (source: string): string => {
+    const head = source.split(':')[0];
+    if (head === 'tesseract') return 'Tesseract';
+    if (head === 'ocrspace') return 'OCR.space';
+    if (head === 'gemini') return 'Gemini';
+    return source;
+  };
+
   /** Map a Phase-1 scan candidate onto the candidate shape the component ranks. */
   const toComponentCandidate = (candidate: ScanCandidate): OcrCandidate => ({
     source: 'variant',
@@ -172,13 +190,15 @@ export function ScanCalculator() {
    * Recognize via the Phase-1 pipeline: three preprocessing variants
    * (grayscale, Otsu, Sauvola), each read with PSM 7 and PSM 13 under the
    * LSTM engine and the scan whitelist — at most 6 recognitions per scan —
-   * then normalize, score and rank the readings. Returns the best candidate,
-   * or null when no variant produced a valid expression (the caller reloads
-   * the engine and retries once).
+   * then normalize, score and rank the readings. Returns the best candidate
+   * for the local fallback AND the full candidate list for the consensus
+   * route (each variant is a distinct source there).
    */
-  const runRecognition = async (preprocessedCanvas: HTMLCanvasElement): Promise<OcrCandidate | null> => {
+  const runRecognition = async (
+    preprocessedCanvas: HTMLCanvasElement
+  ): Promise<{ best: OcrCandidate | null; scanCandidates: ScanCandidate[] }> => {
     const scanCandidates = await recognizeScanCandidates(preprocessedCanvas, getWorker);
-    return pickBestCandidate(scanCandidates.map(toComponentCandidate));
+    return { best: pickBestCandidate(scanCandidates.map(toComponentCandidate)), scanCandidates };
   };
 
   const handleRecognize = async () => {
@@ -191,6 +211,7 @@ export function ScanCalculator() {
     editedWhileProcessingRef.current = false;
     setError(null);
     resetRecognitionState();
+    emitStage('prepare', 'running');
 
     try {
       // Preprocess image
@@ -211,67 +232,90 @@ export function ScanCalculator() {
       ctx.drawImage(img, 0, 0);
 
       const preprocessedCanvas = preprocessForOCR(canvas);
-      let best = await runRecognition(preprocessedCanvas);
+      emitStage('prepare', 'done');
+
+      // Tesseract variant passes (Phase 1 pipeline, max 6 recognitions).
+      emitStage('tesseract', 'running');
+      let recognition = await runRecognition(preprocessedCanvas);
 
       // An engine stuck in a bad state — an outdated cached worker.min.js, or
       // a half-downloaded language file — returns nothing usable WITHOUT
       // throwing, so the user just sees a stray character. Discarding the
       // worker and running the passes once more recovers automatically.
-      if (!best?.expression) {
+      if (!recognition.best?.expression) {
         await terminateWorker();
-        best = await runRecognition(preprocessedCanvas);
+        recognition = await runRecognition(preprocessedCanvas);
       }
+      const localBest = recognition.best;
+      emitStage(
+        'tesseract',
+        localBest?.expression ? 'done' : 'failed',
+        localBest?.expression ? undefined : 'nothing readable'
+      );
 
-      // Classic local pipeline first — it is instant, offline, and produces
-      // the OCR hint (or the fallback flag) the vision layer cross-examines.
-      const localBest = best;
-      // Candidates carry the normalized ×/÷ form; the evaluator and the edit
-      // box take the ASCII-cleaned form ("2×3" -> "2*3", "2+3=5" -> "2+3").
-      let processedText = localBest ? toExpression(localBest.expression) : '';
-      let source: 'gemini' | 'local' | null = processedText ? 'local' : null;
-      let disagreement = false;
-
-      if (geminiEnabled) {
-        try {
-          const hint = localBest?.rawText?.trim() ? localBest.rawText.trim() : null;
-          // The preprocessed crop (grayscale, contrast-normalized, deskewed,
-          // cropped to the ink) travels along as a second image: through
-          // camera glare, shadows and colour noise it is often the sharper
-          // read, and the payload alone is a weak, frequently wrong hint.
-          let enhanced: string | null = null;
-          try {
-            const preUrl = preprocessedCanvas.toDataURL('image/png');
-            enhanced = preUrl.startsWith('data:image') ? preUrl : null;
-          } catch {
-            enhanced = null;
-          }
-          const gemini = await recognizeWithGemini(capturedImage, hint, enhanced);
-          setGeminiVerified(gemini.verified);
-          if (gemini.expression) {
-            // Spacing is presentation: compare compacted readings so a
-            // harmless space difference cannot hide a real correction.
-            const normalizedLocal = processedText.replace(/\s+/g, '');
-            disagreement = Boolean(normalizedLocal) && gemini.expression !== normalizedLocal;
-            processedText = gemini.expression;
-            source = 'gemini';
-          }
-          // gemini.unreadable && processedText → the local reading stands.
-          // gemini.unreadable && !processedText → the "nothing readable"
-          // message below applies to both engines.
-        } catch (error) {
-          // Any Gemini failure degrades to the proven local flow.
-          setGeminiMessage(
-            error instanceof GeminiUnavailableError
-              ? `${error.message} Local recognition is still active.`
-              : 'Gemini is unreachable — local recognition is still active.'
-          );
-          if (import.meta.env.DEV) console.warn('Gemini recognition failed:', error);
+      // OCR.space — a soft engine: every failure degrades to a plain message.
+      emitStage('ocrspace', 'running');
+      const ocrspaceCandidates: { expression: string; source: string }[] = [];
+      try {
+        const ocr = await requestOcrSpace(preprocessedCanvas.toDataURL('image/png'));
+        if (ocr.available && ocr.expression) {
+          emitStage('ocrspace', 'done', `read by engine ${ocr.engine ?? 2}`);
+          ocrspaceCandidates.push({ expression: ocr.expression, source: 'ocrspace' });
+        } else if (ocr.available) {
+          emitStage('ocrspace', 'skipped', 'no text found');
+        } else {
+          emitStage('ocrspace', 'skipped', ocrSpaceMessage(ocr.reason));
         }
+      } catch {
+        emitStage('ocrspace', 'failed', 'OCR.space is unreachable.');
       }
 
-      // A per-character confidence only exists for the winning LOCAL pass;
-      // a Gemini-validated result shows its cross-check state instead.
-      const confidenceKnown = source === 'local' ? (localBest?.confidenceKnown ?? false) : false;
+      // Consensus: server-side cache, decide() and (only if needed) the
+      // protected Gemini arbiter. The server answers in one response, so the
+      // server-side rows are mapped from its stage trace.
+      emitStage('cache', 'running');
+      emitStage('compare', 'running');
+      let consensus: ConsensusClientResult | null = null;
+      try {
+        consensus = await requestConsensus(
+          preprocessedCanvas.toDataURL('image/png'),
+          [
+            ...recognition.scanCandidates.map((candidate) => ({
+              expression: candidate.expression,
+              confidence: candidate.confidence,
+              source: `tesseract:${candidate.variant}-psm${candidate.psm}`,
+            })),
+            ...ocrspaceCandidates,
+          ]
+        );
+        setStages((prev) => applyStageEvents(prev, serverStagesToEvents(consensus!.stages)));
+      } catch {
+        emitStage('cache', 'failed', 'unreachable');
+        emitStage('compare', 'failed', 'The comparison service is unreachable.');
+        emitStage('gemini', 'skipped', 'not available');
+        // Without the consensus verdict the local reading ships unverified.
+        setScanMeta({ verified: false, sources: [], alternatives: [] });
+      }
+
+      // The consensus expression wins when the server produced one; the
+      // local reading stands when the consensus service is unavailable.
+      const processedText = consensus?.expression
+        ? consensus.expression
+        : localBest
+        ? toExpression(localBest.expression)
+        : '';
+
+      if (consensus) {
+        setScanMeta({
+          verified: consensus.verified,
+          sources: consensus.sources,
+          alternatives: consensus.alternatives,
+        });
+      }
+
+      // A per-character confidence only exists for a purely local reading
+      // (the consensus route does not report symbol confidences).
+      const confidenceKnown = consensus ? false : (localBest?.confidenceKnown ?? false);
       const lowCount = confidenceKnown ? lowConfidenceSymbolCount(localBest?.segment) : 0;
       setLowConfidenceIndices(Array.from({ length: lowCount }, (_, i) => i));
 
@@ -279,14 +323,13 @@ export function ScanCalculator() {
         setRecognizedText(processedText);
         // A confidence score is meaningless when nothing was read.
         setConfidence(processedText && confidenceKnown ? localBest?.confidence ?? null : null);
-        // Surface which ambiguous characters were auto-corrected so a misread
-        // like "O" keeps getting caught even when confidence reads fine.
-        setAmbiguousCorrections(
-          processedText && source === 'local' ? localBest?.substitutions ?? [] : []
-        );
-        setRecognitionSource(processedText ? source : null);
-        setEngineDisagreement(disagreement);
       }
+
+      emitStage(
+        'final',
+        processedText ? 'done' : 'failed',
+        processedText ? undefined : 'nothing readable'
+      );
 
       if (!processedText) {
         setError(
@@ -295,6 +338,7 @@ export function ScanCalculator() {
       }
     } catch (err) {
       console.error('OCR failed:', err);
+      emitStage('final', 'failed', 'recognition failed');
       // Drop the worker so the next attempt starts from a clean engine.
       await terminateWorker();
       setError(
@@ -411,17 +455,9 @@ export function ScanCalculator() {
     setError(null);
     setBlurWarning(false);
     setLowConfidenceIndices([]);
-    setAmbiguousCorrections([]);
-    setGeminiMessage(null);
-    setRecognitionSource(null);
-    setEngineDisagreement(false);
     setSolvedByGemini(false);
-    setGeminiVerified(false);
-    setGeminiMessage(null);
-    setRecognitionSource(null);
-    setEngineDisagreement(false);
-    setSolvedByGemini(false);
-    setGeminiVerified(false);
+    setStages(initialStages());
+    setScanMeta(null);
     setHasScanned(false);
   };
 
@@ -437,7 +473,8 @@ export function ScanCalculator() {
     setResult(null);
     setError(null);
     setHasScanned(false);
-    setAmbiguousCorrections([]);
+    setStages(initialStages());
+    setScanMeta(null);
     setShowCamera(true);
   };
 
@@ -480,12 +517,9 @@ export function ScanCalculator() {
     setError(null);
     setBlurWarning(false);
     setLowConfidenceIndices([]);
-    setAmbiguousCorrections([]);
-    setGeminiMessage(null);
-    setRecognitionSource(null);
-    setEngineDisagreement(false);
     setSolvedByGemini(false);
-    setGeminiVerified(false);
+    setStages(initialStages());
+    setScanMeta(null);
     setHasScanned(false);
   };
 
@@ -613,6 +647,11 @@ export function ScanCalculator() {
             >
               {isProcessing ? 'Processing...' : '🔍 Recognize Text'}
             </button>
+            {stages.some((stage) => stage.state !== 'pending') && (
+              <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700 rounded-lg">
+                <StageList stages={stages} />
+              </div>
+            )}
           </div>
         )}
 
@@ -636,9 +675,7 @@ export function ScanCalculator() {
                   setResult(null);
                   setError(null);
                   setLowConfidenceIndices([]);
-                  setAmbiguousCorrections([]);
                   setSolvedByGemini(false);
-                  setEngineDisagreement(false);
                 }}
                 spellCheck={false}
                 autoCapitalize="off"
@@ -671,40 +708,63 @@ export function ScanCalculator() {
                   )}
                 </div>
               )}
-              {recognitionSource === 'gemini' && !engineDisagreement && (
-                <p className="mt-1 sm:mt-2 text-xs sm:text-sm text-purple-600 dark:text-purple-300" data-testid="recognition-source">
-                  ✨ Cross-validated by Google Gemini
-                </p>
-              )}
-              {recognitionSource === 'gemini' && engineDisagreement && (
-                <p role="status" className="mt-1 sm:mt-2 text-xs sm:text-sm text-amber-600 dark:text-amber-400" data-testid="recognition-source">
-                  ⚠️ Gemini and the local OCR engine read this differently — please verify the
-                  expression above before solving.
-                </p>
-              )}
-              {recognitionSource === 'gemini' && !geminiVerified && (
-                <p role="status" className="mt-1 sm:mt-2 text-xs sm:text-sm text-amber-600 dark:text-amber-400" data-testid="gemini-verified">
-                  ⚠️ Reading not independently verified — check each digit before solving.
-                </p>
-              )}
-              {geminiEnabled === true && recognitionSource !== 'gemini' && recognitionSource !== null && (
-                <p className="mt-1 sm:mt-2 text-xs sm:text-sm text-gray-500 dark:text-gray-400" data-testid="recognition-source">
-                  📷 Recognized locally (offline mode)
-                </p>
-              )}
-              {geminiMessage && (
-                <p role="status" className="mt-1 sm:mt-2 text-xs sm:text-sm text-amber-600 dark:text-amber-400">
-                  {geminiMessage}
-                </p>
-              )}
-              {ambiguousCorrections.length > 0 && (
-                <p
-                  role="status"
-                  className="mt-1 sm:mt-2 text-xs sm:text-sm text-orange-600 dark:text-orange-400"
-                >
-                  ⚠️ Ambiguous characters were auto-corrected: {ambiguousCorrections.join(', ')} — please
-                  verify them before solving.
-                </p>
+              {/* Phase 4: verification verdict, engine sources, alternatives. */}
+              {scanMeta && (
+                <div className="mt-2 space-y-2 text-xs sm:text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      data-testid="verification-badge"
+                      role="status"
+                      className={`px-2 py-0.5 rounded-full font-medium ${
+                        scanMeta.verified
+                          ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
+                          : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                      }`}
+                    >
+                      {scanMeta.verified ? '✓ Verified' : '⚠ Unverified — please check'}
+                    </span>
+                    {scanMeta.sources.length > 0 && (
+                      <span className="flex flex-wrap items-center gap-1" data-testid="engine-sources">
+                        <span className="text-gray-500 dark:text-gray-400">Engines:</span>
+                        {scanMeta.sources.map((source) => (
+                          <span
+                            key={source}
+                            className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 whitespace-nowrap"
+                          >
+                            {friendlyEngine(source)}
+                          </span>
+                        ))}
+                      </span>
+                    )}
+                  </div>
+                  {!scanMeta.verified && scanMeta.alternatives.length > 0 && (
+                    <div data-testid="alternatives" className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-gray-500 dark:text-gray-400">Other readings — tap to use:</span>
+                      {scanMeta.alternatives.map((alternative) => (
+                        <button
+                          key={alternative}
+                          type="button"
+                          onClick={() => {
+                            // Choosing an alternative is the user's tap-to-confirm:
+                            // it fills the box; solving still needs its own tap.
+                            setRecognizedText(alternative);
+                            setResult(null);
+                            setError(null);
+                          }}
+                          className="px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 font-mono text-gray-800 dark:text-gray-200 hover:bg-blue-50 dark:hover:bg-gray-600"
+                        >
+                          {alternative}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {scanMeta.verified === false && (
+                    <p role="status" className="text-amber-600 dark:text-amber-400">
+                      This reading was not confirmed by two engines. Check the digits, pick another
+                      reading above, or solve anyway — nothing is solved automatically.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 
@@ -713,7 +773,11 @@ export function ScanCalculator() {
               disabled={geminiBusy}
               className="w-full p-3 sm:p-4 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed text-xs sm:text-sm"
             >
-              {geminiBusy ? '🤖 Solving with Gemini…' : 'Solve Expression'}
+              {geminiBusy
+                ? '🤖 Solving with Gemini…'
+                : scanMeta?.verified === false
+                ? 'Solve anyway (unverified)'
+                : 'Solve Expression'}
             </button>
             {geminiEnabled === true && recognizedText && (
               <button

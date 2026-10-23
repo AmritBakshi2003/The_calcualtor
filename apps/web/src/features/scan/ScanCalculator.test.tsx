@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ScanCalculator } from './ScanCalculator';
+import { requestConsensus, requestOcrSpace } from './scanEngineClient';
 
 const { worker } = vi.hoisted(() => ({
   worker: {
@@ -34,6 +35,24 @@ vi.mock('./ocr/preprocess', () => ({
       canvas: { toDataURL: () => 'data:image/png;base64,AAAA' },
     })),
 }));
+
+// The server engines are HTTP calls; every test mocks them explicitly.
+// Defaults: OCR.space unconfigured, consensus answers nothing (the local
+// reading stands) — keeps the existing local-flow tests focused.
+vi.mock('./scanEngineClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./scanEngineClient')>();
+  return {
+    ...actual,
+    requestOcrSpace: vi.fn(async () => ({ available: false, reason: 'not_configured' })),
+    requestConsensus: vi.fn(async () => ({
+      expression: '',
+      verified: false,
+      sources: [],
+      alternatives: [],
+      stages: ['cache:miss', 'decide:needs_arbiter', 'arbiter:skipped:not_configured'],
+    })),
+  };
+});
 
 const ocrText = (text: string, confidence = 90) => ({ data: { text, confidence, lines: [] } });
 
@@ -69,12 +88,31 @@ describe('ScanCalculator editing', () => {
     worker.setParameters.mockReset().mockResolvedValue(undefined);
     worker.recognize.mockReset();
     terminateWorker.mockReset().mockResolvedValue(undefined);
+    vi.mocked(requestOcrSpace).mockResolvedValue({ available: false, reason: 'not_configured' });
+    vi.mocked(requestConsensus).mockResolvedValue({
+      expression: '',
+      verified: false,
+      sources: [],
+      alternatives: [],
+      stages: ['cache:miss', 'decide:needs_arbiter', 'arbiter:skipped:not_configured'],
+    });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
+
+  const mockConsensus = (result: Partial<Awaited<ReturnType<typeof requestConsensus>>>) => {
+    vi.mocked(requestConsensus).mockResolvedValue({
+      expression: '',
+      verified: false,
+      sources: [],
+      alternatives: [],
+      stages: ['cache:miss', 'decide:needs_arbiter', 'arbiter:skipped:not_configured'],
+      ...result,
+    } as Awaited<ReturnType<typeof requestConsensus>>);
+  };
 
   it('keeps the edit box when OCR finds nothing, so the expression can be typed by hand', async () => {
     worker.recognize.mockResolvedValue(ocrText(''));
@@ -83,7 +121,7 @@ describe('ScanCalculator editing', () => {
     expect(await screen.findByText(/nothing readable was found/i)).toBeTruthy();
 
     fireEvent.change(box, { target: { value: '2+3' } });
-    fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
+    fireEvent.click(screen.getByRole('button', { name: /solve (expression|anyway)/i }));
 
     expect(await screen.findByText('5')).toBeTruthy();
   });
@@ -94,10 +132,10 @@ describe('ScanCalculator editing', () => {
 
     fireEvent.change(box, { target: { value: '' } });
     expect(screen.getByLabelText(/recognized expression/i)).toBeTruthy();
-    expect(screen.getByRole('button', { name: /solve expression/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /solve (expression|anyway)/i })).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText(/recognized expression/i), { target: { value: '6×7' } });
-    fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
+    fireEvent.click(screen.getByRole('button', { name: /solve (expression|anyway)/i }));
     expect(await screen.findByText('42')).toBeTruthy();
   });
 
@@ -106,7 +144,7 @@ describe('ScanCalculator editing', () => {
     const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
 
     await waitFor(() => expect(box.value).toBe('2+3'));
-    fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
+    fireEvent.click(screen.getByRole('button', { name: /solve (expression|anyway)/i }));
     expect(await screen.findByText('5')).toBeTruthy();
   });
 
@@ -114,7 +152,7 @@ describe('ScanCalculator editing', () => {
     worker.recognize.mockResolvedValue(ocrText('2+3'));
     const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
 
-    fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
+    fireEvent.click(screen.getByRole('button', { name: /solve (expression|anyway)/i }));
     expect(await screen.findByText('5')).toBeTruthy();
 
     fireEvent.change(box, { target: { value: '2+4' } });
@@ -146,7 +184,7 @@ describe('ScanCalculator editing', () => {
     worker.recognize.mockRejectedValue(new Error('boom'));
     await uploadAndRecognize();
 
-    await waitFor(() => expect(screen.getByText(/nothing readable/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Nothing readable was found/i)).toBeTruthy());
     // last setParameters call must be the reset to defaults ({}), not the PSM override
     const last = worker.setParameters.mock.calls.at(-1)?.[0];
     expect(last).toEqual({});
@@ -161,7 +199,7 @@ describe('ScanCalculator editing', () => {
     const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
 
     await waitFor(() => expect(box.value).toBe('23'));
-    fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
+    fireEvent.click(screen.getByRole('button', { name: /solve (expression|anyway)/i }));
     expect(await screen.findByTestId('scan-result')).toHaveTextContent('23');
   });
 
@@ -171,7 +209,7 @@ describe('ScanCalculator editing', () => {
     const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
 
     await waitFor(() => expect(box.value).toBe('1000+5'));
-    fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
+    fireEvent.click(screen.getByRole('button', { name: /solve (expression|anyway)/i }));
     expect(await screen.findByText('1005')).toBeTruthy();
   });
 
@@ -197,7 +235,7 @@ describe('ScanCalculator editing', () => {
     await waitFor(() => expect(box.value).toBe('2+2'));
     // No "auto-corrected" warning: O was dropped, not substituted.
     expect(screen.queryByText(/auto-corrected/i)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
+    fireEvent.click(screen.getByRole('button', { name: /solve (expression|anyway)/i }));
     expect(await screen.findByText('4')).toBeTruthy();
   });
 
@@ -222,5 +260,113 @@ describe('ScanCalculator editing', () => {
 
     expect(await screen.findByText(/failed to rotate/i)).toBeTruthy();
     expect(consoleError.mock.calls.some((call) => String(call[1]).includes('encode'))).toBe(true);
+  });
+
+  it('shows the verified badge and the engine sources for a consensus result', async () => {
+    worker.recognize.mockResolvedValue(ocrText('2+3'));
+    mockConsensus({
+      expression: '2+3',
+      verified: true,
+      sources: ['tesseract:grayscale-psm7', 'ocrspace'],
+      stages: ['cache:miss', 'decide:consensus'],
+    });
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('2+3'));
+    const badge = await screen.findByTestId('verification-badge');
+    expect(badge.textContent).toContain('Verified');
+    expect(badge.textContent).not.toContain('Unverified');
+    const sources = screen.getByTestId('engine-sources');
+    expect(sources.textContent).toContain('Tesseract');
+    expect(sources.textContent).toContain('OCR.space');
+  });
+
+  it('unverified result: badge, tappable alternatives, and no auto-solve', async () => {
+    worker.recognize.mockResolvedValue(ocrText('2+3'));
+    mockConsensus({
+      expression: '2+3',
+      verified: false,
+      alternatives: ['2×3', '2+8'],
+      stages: ['cache:miss', 'decide:needs_arbiter', 'arbiter:gemini-3.5-flash-lite:no_match'],
+    });
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('2+3'));
+    expect((await screen.findByTestId('verification-badge')).textContent).toContain('Unverified');
+
+    // Nothing is solved automatically: no result appears without a tap.
+    expect(screen.queryByTestId('scan-result')).toBeNull();
+
+    // Alternatives are tappable and fill the box; solving still needs a tap.
+    fireEvent.click(screen.getByRole('button', { name: '2×3' }));
+    expect(box.value).toBe('2×3');
+    expect(screen.queryByTestId('scan-result')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /solve anyway/i }));
+    expect(await screen.findByTestId('scan-result')).toHaveTextContent('6');
+  });
+
+  it('a busy Gemini shows a short plain message and a skipped stage', async () => {
+    worker.recognize.mockResolvedValue(ocrText('2+3'));
+    mockConsensus({
+      expression: '2+3',
+      verified: false,
+      sources: ['tesseract:grayscale-psm7'],
+      stages: ['cache:miss', 'decide:needs_arbiter', 'arbiter:gemini-3.5-flash-lite:429:busy'],
+    });
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('2+3'));
+    expect(await screen.findByText('Gemini is busy — try again shortly.')).toBeTruthy();
+    const geminiRow = document.querySelector('li[data-stage="gemini"]');
+    expect(geminiRow?.getAttribute('data-state')).toBe('skipped');
+  });
+
+  it('a failing OCR.space engine shows a short plain message', async () => {
+    worker.recognize.mockResolvedValue(ocrText('2+3'));
+    vi.mocked(requestOcrSpace).mockResolvedValue({ available: false, reason: 'timeout' });
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('2+3'));
+    expect(await screen.findByText('OCR.space timed out.')).toBeTruthy();
+    expect(document.querySelector('li[data-stage="ocrspace"]')?.getAttribute('data-state')).toBe(
+      'skipped'
+    );
+  });
+
+  it('drives the stage list from the pipeline and finishes with Final check', async () => {
+    worker.recognize.mockResolvedValue(ocrText('2+3'));
+    mockConsensus({
+      expression: '2+3',
+      verified: true,
+      sources: ['tesseract:grayscale-psm7'],
+      stages: ['cache:miss', 'decide:consensus'],
+    });
+    await uploadAndRecognize();
+
+    const list = await screen.findByTestId('scan-stages');
+    const states = Object.fromEntries(
+      Array.from(list.querySelectorAll('li')).map((row) => [
+        row.getAttribute('data-stage'),
+        row.getAttribute('data-state'),
+      ])
+    );
+    expect(states.prepare).toBe('done');
+    expect(states.tesseract).toBe('done');
+    expect(states.ocrspace).toBe('skipped'); // mocked unconfigured
+    expect(states.compare).toBe('done');
+    expect(states.final).toBe('done');
+    // Consensus reached: the Gemini row was never needed, so it stays hidden.
+    expect(states.gemini).toBeUndefined();
+  });
+
+  it('keeps the local reading when the consensus service is unreachable', async () => {
+    worker.recognize.mockResolvedValue(ocrText('2+3'));
+    vi.mocked(requestConsensus).mockRejectedValue(new Error('consensus_http_503'));
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('2+3'));
+    expect(await screen.findByText('The comparison service is unreachable.')).toBeTruthy();
+    expect((await screen.findByTestId('verification-badge')).textContent).toContain('Unverified');
   });
 });
