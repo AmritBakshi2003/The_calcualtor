@@ -16,6 +16,10 @@
  */
 
 import { normalize } from '@calculator-suite/math-core';
+import type { KVNamespace } from '@cloudflare/workers-types';
+import { ApiError } from './http';
+import { parseImageField } from './ocrspace';
+import type { AllowedImageMime } from './recognize';
 
 /** One reading from one engine/variant. `source` labels are free-form but
  * MUST differ between engines/variants for consensus to count them. */
@@ -128,4 +132,70 @@ export function decide(candidates: ConsensusCandidate[]): Decision {
     alternatives: ranked.slice(1, 4).map((g) => g.expression),
     topCandidates: ranked.slice(0, 3),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Step 2: SHA-256 image cache (KV, TTL 24h — a hit skips everything).
+// ---------------------------------------------------------------------------
+
+export const CACHE_TTL_SECONDS = 24 * 60 * 60;
+export const CACHE_KEY_PREFIX = 'scan:v1:';
+
+/** Decoded image bytes from standard base64 (charset already validated). */
+export function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/** Lowercase hex SHA-256 of the image bytes — the cache key material. */
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export function cacheKeyFor(bytes: Uint8Array): Promise<string> {
+  return sha256Hex(bytes).then((hex) => `${CACHE_KEY_PREFIX}${hex}`);
+}
+
+/** Cache read: null on miss, unbound KV, or an unreadable entry. */
+export async function cacheGet(kv: KVNamespace | undefined, key: string): Promise<unknown | null> {
+  if (!kv) return null;
+  try {
+    const raw = await kv.get(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/** Cache write: best-effort — a failing KV can never fail the pipeline. */
+export async function cachePut(
+  kv: KVNamespace | undefined,
+  key: string,
+  value: object
+): Promise<void> {
+  if (!kv) return;
+  try {
+    await kv.put(key, JSON.stringify(value), { expirationTtl: CACHE_TTL_SECONDS });
+  } catch {
+    // Cache write failures are invisible to the caller.
+  }
+}
+
+/**
+ * Validate the consensus request's image: bare base64 or a data URI, mime
+ * from the data URI or an explicit allowlisted `mime` field, decoded size
+ * capped below the 4 MB body cap. Invalid input is a 400/413 ApiError.
+ */
+export function parseConsensusImage(
+  image: unknown,
+  explicitMime: unknown
+): { base64: string; mime: AllowedImageMime } {
+  if (typeof image !== 'string' || image.length === 0) {
+    throw new ApiError(400, 'VALIDATION_ERROR', 'image is required.');
+  }
+  return parseImageField(image, explicitMime, 'image', 3 * 1024 * 1024);
 }

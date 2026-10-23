@@ -1,5 +1,5 @@
 /** Environment bindings the Worker receives. */
-import type { Fetcher } from '@cloudflare/workers-types';
+import type { Fetcher, KVNamespace } from '@cloudflare/workers-types';
 
 export interface WorkerEnv {
   /** Gemini API key — a Cloudflare secret. Absent ⇒ Gemini is disabled. */
@@ -14,6 +14,12 @@ export interface WorkerEnv {
   POSTHOG_HOST?: string;
   /** Static asset binding declared in wrangler.jsonc. */
   ASSETS?: Fetcher;
+  /**
+   * KV namespace for the scan pipeline (Phase 3): result cache (24h TTL per
+   * image SHA-256), Gemini daily counters and the busy marker. OPTIONAL —
+   * when unbound, the pipeline runs without cache/quota tracking.
+   */
+  SCAN_CACHE?: KVNamespace;
 }
 
 /**

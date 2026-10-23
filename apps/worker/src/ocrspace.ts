@@ -50,10 +50,16 @@ function isAllowedMime(value: string): value is AllowedImageMime {
  * what the browser's canvas.toDataURL produces). The mime inside a data URI
  * wins; an explicit `mime` field is the fallback; default is PNG.
  */
-function parseImageField(
+/**
+ * Validate one image field (bare base64 or data URI) against a decoded-size
+ * cap. Shared with the consensus pipeline (Phase 3), which uses a different
+ * cap — hence the parameter.
+ */
+export function parseImageField(
   image: string,
   explicitMime: unknown,
-  label: string
+  label: string,
+  maxBytes: number = OCR_SPACE_MAX_IMAGE_BYTES
 ): OcrSpaceImage {
   let base64 = image;
   let mime: AllowedImageMime | undefined;
@@ -79,8 +85,8 @@ function parseImageField(
   if (decoded === 0) {
     throw new ApiError(400, 'INVALID_IMAGE', `${label} decoded to zero bytes.`);
   }
-  if (decoded > OCR_SPACE_MAX_IMAGE_BYTES) {
-    throw new ApiError(413, 'IMAGE_TOO_LARGE', `${label} exceeds the 1 MB limit.`);
+  if (decoded > maxBytes) {
+    throw new ApiError(413, 'IMAGE_TOO_LARGE', `${label} exceeds the ${Math.round(maxBytes / (1024 * 1024))} MB limit.`);
   }
 
   return { base64, mime: mime ?? 'image/png' };
@@ -92,7 +98,7 @@ function parseJsonImage(body: object): OcrSpaceImage {
   if (typeof record.image !== 'string' || record.image.length === 0) {
     throw new ApiError(400, 'VALIDATION_ERROR', 'image is required.');
   }
-  return parseImageField(record.image, record.mime, 'image');
+  return parseImageField(record.image, record.mime, 'image', OCR_SPACE_MAX_IMAGE_BYTES);
 }
 
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
