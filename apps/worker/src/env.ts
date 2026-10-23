@@ -4,6 +4,8 @@ import type { Fetcher } from '@cloudflare/workers-types';
 export interface WorkerEnv {
   /** Gemini API key — a Cloudflare secret. Absent ⇒ Gemini is disabled. */
   GEMINI_API_KEY?: string;
+  /** OCR.space API key — a Cloudflare secret. Absent ⇒ /api/scan/ocrspace reports unavailable. */
+  OCR_SPACE_API_KEY?: string;
   /** Optional model override (defaults to a documented, current flash model). */
   GEMINI_MODEL?: string;
   /** PostHog project capture token; absent ⇒ AI observability is a no-op. */
