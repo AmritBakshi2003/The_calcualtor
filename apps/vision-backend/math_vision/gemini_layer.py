@@ -21,12 +21,17 @@ from .exceptions import GeminiSyncError, MissingApiKeyError
 from .expression_eval import strip_non_math
 
 API_KEY_ENV_VAR = "GEMINI_API_KEY"
-MODEL_ID = "gemini-2.5-flash"
+# NOTE: gemini-2.5-flash was retired for new API users (404 NOT_FOUND:
+# "no longer available to new users"); Google now serves this tier via
+# gemini-3.8-flash. The comment documents it for the next maintainer.
+MODEL_ID = "gemini-3.8-flash"
 FALLBACK_MARKER_FLAG = "[Blank/Unreadable Text]"
 
-#: The max_output_tokens bound plus temperature 0 keep the agent deterministic
-#: and cheap; a math expression never needs multiple pages of tokens.
-GENERATION_CONFIG_KWARGS = {"temperature": 0.0, "max_output_tokens": 256}
+#: Temperature 0 keeps the agent deterministic. The token budget must leave
+#: room for the newer Gemini models' internal thinking tokens: an 8-token ping
+#: returned an EMPTY visible body because thinking consumed everything, and 256
+#: risks starving the one-line answer too. 1024 covers thinking + answer.
+GENERATION_CONFIG_KWARGS = {"temperature": 0.0, "max_output_tokens": 1024}
 
 SYSTEM_INSTRUCTION = (
     "You are a specialized mathematical text VALIDATION agent. A local OCR "
