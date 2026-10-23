@@ -323,7 +323,8 @@ export function ScanCalculator() {
 
     // Last resort: one line over the whole image. Photos with a busy
     // background sometimes segment into fragments the block pass garbles.
-    if (!best || best.score < 25) {      const single = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_LINE });
+    if (!best || best.score < 25) {
+      const single = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_LINE });
       consider('fallback', single.data.text, passConfidence(single.data), false, ranked[0]);
       best = pickBestCandidate(candidates) ?? best;
     }
