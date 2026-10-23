@@ -14,11 +14,12 @@
  *   `{ available: false, reason }` with HTTP 200 so the recognition
  *   pipeline continues with the other engines.
  *
- * Step 2 (this file): request parsing only. The upstream call, engine
- * fallback and route follow in the next steps.
+ * This file: request parsing + the upstream call (engine 2, retried once
+ * with engine 1 when engine 2 reads nothing). The route wiring and the
+ * soft-fail envelope follow.
  */
 
-import type { WorkerEnv } from './env';
+import type { FetchLike, WorkerEnv } from './env';
 import { ApiError, readJsonBody } from './http';
 import { ALLOWED_IMAGE_MIMES, decodedBase64Length, type AllowedImageMime } from './recognize';
 
@@ -186,3 +187,101 @@ export async function parseOcrSpaceImage(request: Request): Promise<OcrSpaceImag
  * GeminiEnv; OCR_SPACE_API_KEY is a Cloudflare secret (never logged).
  */
 export type OcrSpaceEnv = Pick<WorkerEnv, 'OCR_SPACE_API_KEY'>;
+
+export const OCR_SPACE_TIMEOUT_MS = 10_000;
+
+export type OcrSpaceErrorCode = 'timeout' | 'upstream_error' | 'malformed_response';
+
+/**
+ * One OCR.space failure. `detail` carries only technical-safe facts (the
+ * numeric upstream HTTP status or a fixed phrase) — never an upstream body
+ * and never the API key — so reasons are safe to surface to the browser.
+ */
+export class OcrSpaceError extends Error {
+  readonly code: OcrSpaceErrorCode;
+  readonly upstreamStatus?: number;
+
+  constructor(code: OcrSpaceErrorCode, detail: string, upstreamStatus?: number) {
+    super(detail);
+    this.code = code;
+    this.upstreamStatus = upstreamStatus;
+  }
+}
+
+interface OcrSpaceParsedResult {
+  ParsedText?: unknown;
+}
+
+interface OcrSpaceResponseBody {
+  ParsedResults?: OcrSpaceParsedResult[];
+  IsErroredOnProcessing?: unknown;
+  OCRExitCode?: unknown;
+}
+
+/** Pull the recognized text out of an OCR.space response; '' when none. */
+export function extractOcrSpaceText(body: unknown): string {
+  const record = (typeof body === 'object' && body !== null ? body : {}) as OcrSpaceResponseBody;
+  const results = Array.isArray(record.ParsedResults) ? record.ParsedResults : [];
+  return results
+    .map((result) => (typeof result.ParsedText === 'string' ? result.ParsedText : ''))
+    .join(' ')
+    .trim();
+}
+
+/**
+ * One OCR.space call: `POST /parse/image` with the key in the `apikey`
+ * header and the engine parameters required by the scanner (engine, scale,
+ * English, orientation detection, no overlay). The image travels as a
+ * `base64Image` data URI form field. Returns the recognized text ('' when
+ * nothing was read).
+ */
+export async function callOcrSpace(
+  apiKey: string,
+  image: OcrSpaceImage,
+  engine: 1 | 2,
+  options: { fetchImpl?: FetchLike; timeoutMs?: number } = {}
+): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? OCR_SPACE_TIMEOUT_MS);
+
+  try {
+    const form = new FormData();
+    form.set('base64Image', `data:${image.mime};base64,${image.base64}`);
+    form.set('OCREngine', String(engine));
+    form.set('scale', 'true');
+    form.set('language', 'eng');
+    form.set('detectOrientation', 'true');
+    form.set('isOverlayRequired', 'false');
+
+    const response = await (options.fetchImpl ?? fetch)(OCR_SPACE_API_URL, {
+      method: 'POST',
+      headers: { apikey: apiKey },
+      body: form,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      // Status numbers only: 401/403 = bad key, 429 = quota. Bodies are
+      // never relayed.
+      throw new OcrSpaceError('upstream_error', `OCR.space request failed (${response.status}).`, response.status);
+    }
+
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new OcrSpaceError('malformed_response', 'OCR.space returned malformed JSON.');
+    }
+    if ((body as OcrSpaceResponseBody)?.IsErroredOnProcessing === true) {
+      // HTTP 200 but the engine reported an error of its own.
+      throw new OcrSpaceError('upstream_error', 'OCR.space reported a processing error.');
+    }
+    return extractOcrSpaceText(body);
+  } catch (error) {
+    if (error instanceof OcrSpaceError) throw error;
+    // AbortController timeout or a transport-level network failure.
+    throw new OcrSpaceError('timeout', 'OCR.space request timed out.');
+  } finally {
+    clearTimeout(timer);
+  }
+}
