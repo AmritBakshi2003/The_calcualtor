@@ -32,7 +32,7 @@ A responsive, accessible web calculator suite with Samsung-style workflow, unit 
 
 ## Prerequisites
 
-- Node.js >= 18.0.0
+- Node.js >= 22.0.0
 - npm >= 9.0.0
 
 ## Getting Started
