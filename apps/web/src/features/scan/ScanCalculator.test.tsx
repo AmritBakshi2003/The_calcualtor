@@ -180,4 +180,48 @@ describe('ScanCalculator editing', () => {
     expect(screen.queryByText(/confidence:/i)).toBeNull();
     expect(screen.queryByText(/character\(s\)/i)).toBeNull();
   });
+
+  it('warns about ambiguous characters it auto-corrected instead of hiding them', async () => {
+    // Plan §6: "O" must not silently become "0" — the user has to be told
+    worker.recognize.mockResolvedValue(ocrText('2O + 2'));
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('20 + 2'));
+    const warning = await screen.findByText(/auto-corrected/i);
+    expect(warning).toHaveTextContent('O→0');
+  });
+
+  it('clears the ambiguity warning when the text is edited', async () => {
+    worker.recognize.mockResolvedValue(ocrText('2O + 2'));
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('20 + 2'));
+    expect(screen.getByText(/auto-corrected/i)).toBeTruthy();
+
+    fireEvent.change(box, { target: { value: '2 + 2' } });
+    expect(screen.queryByText(/auto-corrected/i)).toBeNull();
+  });
+
+  it('offers a rotate action for rotated images', async () => {
+    worker.recognize.mockResolvedValue(ocrText('2+2'));
+    await uploadAndRecognize();
+
+    const rotate = await screen.findByRole('button', { name: /rotate image/i });
+    expect(rotate).toBeTruthy();
+  });
+
+  it('fails rotation gracefully when the image cannot be re-encoded', async () => {
+    worker.recognize.mockResolvedValue(ocrText('2+2'));
+    await uploadAndRecognize();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // Simulate an environment where the image cannot be encoded to PNG
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockImplementation(() => {
+      throw new Error('Failed to encode the rotated image');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /rotate image/i }));
+
+    expect(await screen.findByText(/failed to rotate/i)).toBeTruthy();
+    expect(consoleError.mock.calls.some((call) => String(call[1]).includes('encode'))).toBe(true);
+  });
 });

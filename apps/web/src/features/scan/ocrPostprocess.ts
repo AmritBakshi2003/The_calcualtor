@@ -90,11 +90,18 @@ function applySafeSubstitutions(text: string): string {
 }
 
 /**
- * Strip stray characters that are not part of mathematical expressions
+ * Strip stray characters that are not part of mathematical expressions.
+ *
+ * "√" and "π" are real mathematical symbols OCR emits for radicals and pi;
+ * deleting them merely because the arithmetic whitelist does not name them
+ * silently CHANGES the expression ("4√5" would become "45" and evaluate to
+ * the wrong number). They are kept here and mapped by `cleanForEvaluation`.
+ * Anything else unfamiliar (words, currency glyphs, ...) is dropped — the
+ * evaluator otherwise rejects the whole line.
  */
 function stripStrayCharacters(text: string): string {
   // Keep only valid mathematical expression characters
-  return text.replace(/[^0-9+\-*/×÷().,=^%\s]/g, '');
+  return text.replace(/[^0-9+\-*/×÷().,=^%√π\s]/g, '');
 }
 
 /**
@@ -110,6 +117,28 @@ function normalizeOperators(text: string): string {
 /**
  * Main postprocessing function
  */
+/**
+ * Which ambiguous characters this raw OCR text WOULD have auto-substituted
+ * ("1O5" -> "105", standalone "O + 2" -> "0 + 2"). The scanner shows these to
+ * the user so a silent O→0 / l→1 correction cannot hide a misread without a
+ * warning. Mirrors `applySafeSubstitutions` exactly; pure and unit tested.
+ */
+export function ambiguousSubstitutions(raw: string): string[] {
+  const replaced: string[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+    // Report only the letter/pipe look-alikes ("×"→"*", "÷"→"/", "−"→"-"
+    // are deliberate Unicode mappings, not uncertain recognitions; "x" is a
+    // multiplication-in-context mapping covered by the same rule).
+    const substitution = SUBSTITUTIONS[char];
+    if (substitution === undefined || !DIGIT_LOOKALIKES.includes(char)) continue;
+    if (isDigitPosition(raw, i) && !replaced.includes(`${char}→${substitution}`)) {
+      replaced.push(`${char}→${substitution}`);
+    }
+  }
+  return replaced;
+}
+
 export function postprocessOCR(text: string): string {
   if (!text) return '';
 
@@ -185,6 +214,22 @@ export function cleanForEvaluation(text: string): string {
   // Also handle text typed straight into the edit box (no postprocessOCR run):
   // "2x3" must not reach the evaluator as a symbol named x.
   let s = normalizeOperators(line).replace(/(\d)\s*[xX]\s*(?=[\d(.])/g, '$1*');
+
+  // Radical and constant glyphs from OCR (kept by postprocessOCR):
+  //   "√9"      -> "sqrt(9)"
+  //   "√(16)-2" -> "sqrt(16)-2"
+  //   "π"       -> "pi"   ("2π" -> "2*pi", "π(1+2)" -> "pi*(1+2)")
+  // Stripping these instead would silently change the expression's value.
+  s = s.replace(/√\s*\(/g, 'sqrt(');
+  s = s.replace(/√\s*(\d+(?:\.\d+)?)/g, 'sqrt($1)');
+  s = s.replace(/√/g, ''); // an unreadable fragment: drop, the evaluator's error is clearer
+  s = s.replace(/π/g, 'pi');
+  // math.js-style implicit multiplication is not part of the evaluator's
+  // grammar, so insert the explicit operator where OCR geometry implies it.
+  s = s.replace(/([\d)])\s*(?=sqrt\()/g, '$1*');
+  s = s.replace(/([\d)])\s*pi\b/g, '$1*pi');
+  s = s.replace(/pi\s*\(/g, 'pi*('); // "π(1+2)" meant multiplication, not a call
+  s = s.replace(/pi\s*(?=[\d(.])/g, 'pi*');
 
   // Keep the first non-empty segment around "=" ("2+3=5" -> "2+3", "= 2+3" -> "2+3")
   s = s.split('=').map((part) => part.trim()).find((part) => part.length > 0) ?? '';

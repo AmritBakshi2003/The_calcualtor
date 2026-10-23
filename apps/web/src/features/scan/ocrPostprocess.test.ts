@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { postprocessOCR, getCharConfidences, findLowConfidenceIndices } from './ocrPostprocess';
+import { postprocessOCR, getCharConfidences, findLowConfidenceIndices, ambiguousSubstitutions } from './ocrPostprocess';
 
 describe('ocrPostprocess', () => {
   describe('postprocessOCR', () => {
@@ -102,6 +102,20 @@ describe('ocrPostprocess', () => {
     });
   });
 
+  describe('postprocessOCR keeps real math symbols', () => {
+    // Plan §6 recognition rules: "Do not strip mathematical symbols merely
+    // because they are unfamiliar." Stripping silently changed values.
+    it('keeps √ (radical) instead of silently changing the value', () => {
+      // "4√5" used to become "45" and evaluate to 45 instead of ~8.94
+      expect(postprocessOCR('4√5')).toBe('4√5');
+    });
+
+    it('keeps π instead of deleting it', () => {
+      // "2π" used to become "2"
+      expect(postprocessOCR('2π')).toBe('2π');
+    });
+  });
+
   describe('findLowConfidenceIndices', () => {
     it('finds indices below threshold', () => {
       const confidences = [95, 85, 45, 75, 55, 90];
@@ -131,5 +145,40 @@ describe('ocrPostprocess', () => {
       const lowIndices = findLowConfidenceIndices(confidences, 60);
       expect(lowIndices).toEqual([]);
     });
+  });
+});
+
+describe('ambiguousSubstitutions', () => {
+  // Plan §6: substitutions need context AND an ambiguity warning shown to the
+  // user. These tests pin down the context rule so the warning stays accurate.
+  it('reports look-alikes replaced inside digit tokens', () => {
+    expect(ambiguousSubstitutions('2O + 2')).toEqual(['O→0']);
+    expect(ambiguousSubstitutions('1O5')).toEqual(['O→0']);
+    expect(ambiguousSubstitutions('1l5+2')).toEqual(['l→1']);
+  });
+
+  it('reports standalone look-alikes between operators', () => {
+    expect(ambiguousSubstitutions('O + 2')).toEqual(['O→0']);
+    expect(ambiguousSubstitutions('2 − l')).toEqual(['l→1']);
+  });
+
+  it('deduplicates repeated characters', () => {
+    expect(ambiguousSubstitutions('O + O')).toEqual(['O→0']);
+    expect(ambiguousSubstitutions('1OO')).toEqual(['O→0']);
+  });
+
+  it('does not report words that only start with a look-alike', () => {
+    expect(ambiguousSubstitutions('Order 90.00')).toEqual([]);
+    expect(ambiguousSubstitutions('SALE 1O5')).toEqual(['O→0']);
+  });
+
+  it('reports nothing for clean text', () => {
+    expect(ambiguousSubstitutions('2 + 2')).toEqual([]);
+    expect(ambiguousSubstitutions('')).toEqual([]);
+  });
+
+  it('does not report deliberate Unicode operator normalization', () => {
+    // "×"/"÷" are unambiguous glyph mappings, not uncertain recognitions
+    expect(ambiguousSubstitutions('2 × 2')).toEqual([]);
   });
 });

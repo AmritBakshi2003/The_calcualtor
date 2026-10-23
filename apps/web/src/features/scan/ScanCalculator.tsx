@@ -5,7 +5,8 @@ import { CameraCapture } from './CameraCapture';
 import { CropEditor } from './CropEditor';
 import { useOCRWorker, OCR_DEFAULT_PARAMS } from './useOCRWorker';
 import { preprocessForOCR } from './ocrPreprocess';
-import { postprocessOCR, cleanForEvaluation } from './ocrPostprocess';
+import { ambiguousSubstitutions, postprocessOCR, cleanForEvaluation } from './ocrPostprocess';
+import { rotateCanvas90 } from './imageUtils';
 import {
   WHITELIST_CONFIDENCE_FALLBACK,
   expressionScore,
@@ -30,6 +31,10 @@ export function ScanCalculator() {
   const [blurWarning, setBlurWarning] = useState(false);
   const [lowConfidenceIndices, setLowConfidenceIndices] = useState<number[]>([]);
   const [showCropEditor, setShowCropEditor] = useState(false);
+  const [isRotating, setIsRotating] = useState(false);
+  // Ambiguous characters the winning pass auto-corrected ("O"→"0"), shown as
+  // a warning instead of hiding the correction silently.
+  const [ambiguousCorrections, setAmbiguousCorrections] = useState<string[]>([]);
   // True once a recognition attempt has finished (even an empty or failed one),
   // so the edit box stays available for typing the expression manually.
   const [hasScanned, setHasScanned] = useState(false);
@@ -96,16 +101,6 @@ export function ScanCalculator() {
       }
     };
     img.src = imageData;
-  };
-
-  const handleRetake = () => {
-    setCapturedImage(null);
-    setRecognizedText('');
-    setConfidence(null);
-    setResult(null);
-    setError(null);
-    setHasScanned(false);
-    setShowCamera(true);
   };
 
   interface PassOptions {
@@ -280,6 +275,8 @@ export function ScanCalculator() {
         confidence: honest.confidence,
         confidenceKnown: honest.confidenceKnown,
         segment,
+        // Record WHICH look-alikes were auto-corrected so the UI can warn.
+        substitutions: expression ? ambiguousSubstitutions(raw) : [],
         score: expressionScore(expression, honest.confidence, raw),
       });
     };
@@ -343,6 +340,7 @@ export function ScanCalculator() {
     setError(null);
     setBlurWarning(false);
     setLowConfidenceIndices([]);
+    setAmbiguousCorrections([]);
 
     try {
       // Preprocess image
@@ -386,6 +384,9 @@ export function ScanCalculator() {
         setRecognizedText(processedText);
         // A confidence score is meaningless when nothing was read.
         setConfidence(processedText && confidenceKnown ? best?.confidence ?? null : null);
+        // Surface which ambiguous characters were auto-corrected so a misread
+        // like "O" keeps getting caught even when confidence reads fine.
+        setAmbiguousCorrections(processedText ? best?.substitutions ?? [] : []);
       }
 
       if (!processedText) {
@@ -437,16 +438,64 @@ export function ScanCalculator() {
     }
   };
 
-  const handleCropApply = (croppedDataUrl: string) => {
-    setCapturedImage(croppedDataUrl);
-    setShowCropEditor(false);
+  const handleApplyNewImage = (imageDataUrl: string) => {
+    setCapturedImage(imageDataUrl);
     // A new image invalidates any previous recognition result
     setRecognizedText('');
     setConfidence(null);
     setResult(null);
     setError(null);
+    setBlurWarning(false);
     setLowConfidenceIndices([]);
+    setAmbiguousCorrections([]);
     setHasScanned(false);
+  };
+
+  const handleCropApply = (croppedDataUrl: string) => {
+    setShowCropEditor(false);
+    handleApplyNewImage(croppedDataUrl);
+  };
+
+  const handleRetake = () => {
+    setCapturedImage(null);
+    setRecognizedText('');
+    setConfidence(null);
+    setResult(null);
+    setError(null);
+    setHasScanned(false);
+    setAmbiguousCorrections([]);
+    setShowCamera(true);
+  };
+
+  /** Rotate the captured image 90° clockwise (plan Phase 6: rotation). */
+  const handleRotate = async () => {
+    if (!capturedImage || isRotating) return;
+    setIsRotating(true);
+    try {
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Could not load the image'));
+        img.src = capturedImage;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Failed to get canvas context');
+      }
+      ctx.drawImage(img, 0, 0);
+      const rotated = rotateCanvas90(canvas, 1);
+      const dataUrl = typeof rotated.toDataURL === 'function' ? rotated.toDataURL('image/png') : '';
+      if (!dataUrl) throw new Error('Failed to encode the rotated image');
+      handleApplyNewImage(dataUrl);
+    } catch (err) {
+      console.error('Rotation failed:', err);
+      setError('Failed to rotate the image. Retake or re-upload it, or crop to the expression instead.');
+    } finally {
+      setIsRotating(false);
+    }
   };
 
   const handleReset = () => {
@@ -457,6 +506,7 @@ export function ScanCalculator() {
     setError(null);
     setBlurWarning(false);
     setLowConfidenceIndices([]);
+    setAmbiguousCorrections([]);
     setHasScanned(false);
   };
 
@@ -503,6 +553,15 @@ export function ScanCalculator() {
                 className="w-full max-h-48 sm:max-h-64 object-contain rounded-lg border border-gray-300 dark:border-gray-600"
               />
               <div className="absolute top-2 right-2 flex gap-2">
+                <button
+                  onClick={handleRotate}
+                  disabled={isRotating}
+                  className="p-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  aria-label="Rotate image 90 degrees clockwise"
+                  title="Rotate image 90° clockwise"
+                >
+                  ⟳
+                </button>
                 <button
                   onClick={() => setShowCropEditor(true)}
                   className="p-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
@@ -568,6 +627,7 @@ export function ScanCalculator() {
                   setResult(null);
                   setError(null);
                   setLowConfidenceIndices([]);
+                  setAmbiguousCorrections([]);
                 }}
                 spellCheck={false}
                 autoCapitalize="off"
@@ -599,6 +659,15 @@ export function ScanCalculator() {
                     </span>
                   )}
                 </div>
+              )}
+              {ambiguousCorrections.length > 0 && (
+                <p
+                  role="status"
+                  className="mt-1 sm:mt-2 text-xs sm:text-sm text-orange-600 dark:text-orange-400"
+                >
+                  ⚠️ Ambiguous characters were auto-corrected: {ambiguousCorrections.join(', ')} — please
+                  verify them before solving.
+                </p>
               )}
             </div>
 

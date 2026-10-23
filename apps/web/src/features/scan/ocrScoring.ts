@@ -51,6 +51,8 @@ export interface OcrCandidate {
   confidenceKnown?: boolean;
   score: number;
   segment?: OcrSegment;
+  /** Ambiguous characters this pass auto-corrected, e.g. ["O→0", "l→1"]. */
+  substitutions?: string[];
 }
 
 /**
@@ -173,6 +175,6 @@ export function pickBestCandidate<T extends OcrCandidate>(candidates: T[]): T | 
 export function lowConfidenceSymbolCount(segment: OcrSegment | undefined, threshold = 60): number {
   if (!segment?.symbols?.length) return 0;
   return segment.symbols.filter(
-    (symbol) => /[0-9+\-*/×÷().,=^%xX]/.test(symbol.text) && symbol.confidence < threshold
+    (symbol) => /[0-9+\-*/×÷√π().,=^%xX]/.test(symbol.text) && symbol.confidence < threshold
   ).length;
 }

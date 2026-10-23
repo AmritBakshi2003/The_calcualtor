@@ -11,7 +11,10 @@ import Tesseract from 'tesseract.js';
  * whitelist forces unmatchable glyphs onto the nearest allowed character, so
  * the open pass can still win when the real text has other glyphs.
  */
-export const OCR_WHITELIST = '0123456789+-*/×÷().,=^%xX';
+// "√" and "π" stay on the list: removing them made Tesseract coerce a radical
+// or pi glyph onto the nearest digit/operator and silently change the value.
+// cleanForEvaluation maps them to sqrt/pi after recognition.
+export const OCR_WHITELIST = '0123456789+-*/×÷().,=^%xX√π';
 
 /**
  * Parameters the worker is returned to after any one-off pass.

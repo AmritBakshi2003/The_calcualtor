@@ -477,6 +477,134 @@ export function upscaleToTargetHeight(canvas: HTMLCanvasElement, targetHeight: n
   return scaleForOCR(canvas, targetHeight);
 }
 
+export interface SkewOptions {
+  /** Angles beyond ±this are ignored; text is never scanned upside down. */
+  maxAngle?: number;
+}
+
+/**
+ * Estimate how far the text is rotated, in degrees. Positive means the ink
+ * lines DESCEND to the right (the page was rotated clockwise on the photo).
+ *
+ * Uses the ink mask's shifted row projections: for candidate angle `a`, ink
+ * pixel (x, y) is counted in row-bin `y + (x - cx) * tan(a)`. When `a` equals
+ * the true skew, each text line collapses into one concentrated bin, which
+ * maximises the sum of squared bin counts. A coarse pass over whole degrees
+ * finds the ballpark, a fine pass refines it. Sub-samples large images so the
+ * estimate stays cheap.
+ *
+ * Pure over ImageData so it is unit testable. Returns 0 when there is no ink.
+ */
+export function estimateSkewAngle(imageData: ImageData, options: SkewOptions = {}): number {
+  const maxAngle = options.maxAngle ?? 15;
+  const ink = computeInkMask(imageData);
+  if (!ink) return 0;
+
+  const { width, height } = imageData;
+  if (width === 0 || height === 0) return 0;
+  const cx = (width - 1) / 2;
+
+  // Sub-sample ink coordinates so the projection loop stays fast on big photos.
+  const coords: number[] = [];
+  const stride = Math.max(1, Math.ceil(ink.count / 200000));
+  let seen = 0;
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * width;
+    for (let x = 0; x < width; x++) {
+      if (ink.mask[rowStart + x]) {
+        seen++;
+        if (seen % stride === 0) coords.push(x, y);
+      }
+    }
+  }
+  const pointCount = coords.length / 2;
+  if (pointCount === 0) return 0;
+
+  const binCount = height + Math.ceil(width) + 2;
+  const projectionScore = (angleDeg: number): number => {
+    const tan = Math.tan((angleDeg * Math.PI) / 180);
+    const bins = new Float64Array(binCount);
+    for (let i = 0; i < coords.length; i += 2) {
+      // y grows downward; ink at y = yc + k·(x-cx) concentrates when a = θ,
+      // so a positive result really does mean "descends to the right".
+      const bin = Math.round(coords[i + 1] - (coords[i] - cx) * tan);
+      if (bin >= 0 && bin < binCount) bins[bin]++;
+    }
+    let score = 0;
+    for (let b = 0; b < binCount; b++) score += bins[b] * bins[b];
+    return score;
+  };
+
+  let best = 0;
+  let bestScore = projectionScore(0);
+  for (let angle = -maxAngle; angle <= maxAngle + 1e-9; angle += 1) {
+    if (angle === 0) continue;
+    const score = projectionScore(angle);
+    if (score > bestScore) {
+      bestScore = score;
+      best = angle;
+    }
+  }
+  // Refine ±1° in quarter-degree steps around the coarse winner (skip 0 —
+  // projectionScore(0) is already the benchmark for "no skew").
+  if (best !== 0) {
+    for (let angle = best - 1; angle <= best + 1 + 1e-9; angle += 0.25) {
+      if (Math.abs(angle) < 1e-9) continue;
+      const score = projectionScore(angle);
+      if (score > bestScore) {
+        bestScore = score;
+        best = angle;
+      }
+    }
+  }
+  return best;
+}
+
+export interface DeskewResult {
+  canvas: HTMLCanvasElement;
+  /** Detected skew in degrees (see `estimateSkewAngle`). */
+  angle: number;
+  /** True when the canvas was re-drawn to cancel the skew. */
+  corrected: boolean;
+}
+
+/**
+ * Straighten a slightly rotated canvas (plan Phase 6: optional deskewing).
+ * Angles under one degree would blur glyphs more than they fix, so they are
+ * left alone. Never mutates the input canvas; degrades to the original canvas
+ * when canvas access is unavailable (tests, worker-less environments).
+ */
+export function deskewCanvas(
+  canvas: HTMLCanvasElement,
+  options: SkewOptions & { threshold?: number } = {}
+): DeskewResult {
+  if (canvas.width === 0 || canvas.height === 0) return { canvas, angle: 0, corrected: false };
+  const ctx = canvas.getContext('2d');
+  if (!ctx || typeof ctx.getImageData !== 'function') return { canvas, angle: 0, corrected: false };
+
+  const angle = estimateSkewAngle(ctx.getImageData(0, 0, canvas.width, canvas.height), options);
+  if (Math.abs(angle) < (options.threshold ?? 1)) return { canvas, angle, corrected: false };
+
+  const out = document.createElement('canvas');
+  out.width = canvas.width;
+  out.height = canvas.height;
+  const outCtx = out.getContext('2d');
+  if (!outCtx || typeof outCtx.rotate !== 'function') return { canvas, angle, corrected: false };
+
+  // White fill behind the rotation: crop-to-ink later needs paper, not
+  // transparency, to find the text bounds.
+  outCtx.fillStyle = 'white';
+  outCtx.fillRect(0, 0, out.width, out.height);
+  // Ink descends to the right by `angle` degrees (positive); rotating the
+  // canvas counter-clockwise (negative canvas angle) straightens it.
+  outCtx.save();
+  outCtx.translate(out.width / 2, out.height / 2);
+  outCtx.rotate((-angle * Math.PI) / 180);
+  outCtx.drawImage(canvas, -out.width / 2, -out.height / 2);
+  outCtx.restore();
+  return { canvas: out, angle, corrected: true };
+}
+
 export interface InkBounds {
   x: number;
   y: number;
@@ -597,13 +725,14 @@ export function addWhiteBorder(canvas: HTMLCanvasElement, borderSize: number = 1
  *  1. cap the input size so per-pixel work stays fast and memory-safe,
  *  2. grayscale removes color noise (screen subpixel fringes),
  *  3. invertIfDark handles light-on-dark captures (dark-mode screens),
- *  4. crop to the text region so a small expression in a big photo still reads
+ *  4. deskew so later crop/measurements see straight text lines,
+ *  5. crop to the text region so a small expression in a big photo still reads
  *     as a single line,
- *  5. contrast stretch AFTER cropping: on a whole photo the text is a tiny
+ *  6. contrast stretch AFTER cropping: on a whole photo the text is a tiny
  *     share of the pixels, so percentile clipping lands inside the paper's
  *     brightness range and amplifies sensor noise instead of enhancing text,
- *  6. rescale only if the text is clearly too small/large, within hard size caps,
- *  7. white border is added last so it stays white and never skews measurements.
+ *  7. rescale only if the text is clearly too small/large, within hard size caps,
+ *  8. white border is added last so it stays white and never skews measurements.
  *
  * Deliberately skips hard binarization to protect accuracy.
  * Output should be exported as PNG (lossless), never JPEG.
@@ -626,7 +755,13 @@ export function preprocessForOCR(canvas: HTMLCanvasElement): HTMLCanvasElement {
   imageData = invertIfDark(imageData);
   ctx.putImageData(imageData, 0, 0);
 
-  const cropped = cropToInk(work);
+  // Deskew BEFORE cropping: crop-to-ink is computed from the ink mask, so a
+  // skewed page would have its diagonal text box already cut off at the
+  // canvas edges before any later stage could straighten it. Under one degree
+  // is left alone (deskewCanvas decides), so straight captures are untouched.
+  const straightened = deskewCanvas(work);
+
+  const cropped = cropToInk(straightened.canvas);
 
   const cropCtx = cropped.getContext('2d');
   if (cropCtx) {

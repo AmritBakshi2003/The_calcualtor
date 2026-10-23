@@ -40,6 +40,15 @@ describe('cleanForEvaluation', () => {
     ['8 ÷ 2', '8 / 2'],
     ['9 − 4', '9 - 4'],
     ['  2 +   3 ', '2 + 3'],
+    // √/π from OCR are mapped to something the evaluator accepts, not
+    // silently lost ("4√5" used to become "45" = plain wrong)
+    ['√16-2', 'sqrt(16)-2'],
+    ['√(9+7)', 'sqrt(9+7)'],
+    ['4√5+1', '4*sqrt(5)+1'],
+    ['2√(9)', '2*sqrt(9)'],
+    ['2π', '2*pi'],
+    ['2π+1', '2*pi+1'],
+    ['π(1+2)', 'pi*(1+2)'],
     ['abc', ''],
     ['', ''],
   ];
@@ -89,6 +98,15 @@ describe('cleanForEvaluation', () => {
     // the space before the operands survives cleaning
     expect(cleanForEvaluation('12.5 % 4')).toMatch(/12\.5\*\s*4/);
     expect(evaluateExpression(cleanForEvaluation('12.5%4')).result).toBe(50);
+  });
+
+  it('evaluates OCR radicals and pi correctly through the full pipeline', () => {
+    const pipeline = (raw: string) => cleanForEvaluation(postprocessOCR(raw));
+    // 4 × √5 ≈ 8.944 — used to evaluate as the bare number 45
+    expect(Number(evaluateExpression(pipeline('4√5')).result)).toBeCloseTo(4 * Math.sqrt(5), 6);
+    expect(evaluateExpression(pipeline('√(9+7)')).result).toBe(4);
+    // 2 × π used to evaluate as 2
+    expect(Number(evaluateExpression(pipeline('2π')).result)).toBeCloseTo(2 * Math.PI, 6);
   });
 
   it('keeps percent signs that are not between two operands', () => {
