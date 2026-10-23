@@ -22,6 +22,10 @@ apps/web/public/tesseract/
 *.sln
 *.sw?
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 # Environment variables
 .env
 .env.local
