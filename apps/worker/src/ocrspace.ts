@@ -108,9 +108,19 @@ export function bytesToBase64(bytes: Uint8Array): string {
     const b1 = i + 1 < bytes.length ? bytes[i + 1] : undefined;
     const b2 = i + 2 < bytes.length ? bytes[i + 2] : undefined;
     out += BASE64_ALPHABET[b0 >> 2];
-    out += b1 === undefined ? '=' : BASE64_ALPHABET[((b0 & 0x03) << 4) | (b1 >> 4)];
-    out += b1 === undefined ? '=' : b2 === undefined ? '=' : BASE64_ALPHABET[((b1 & 0x0f) << 2) | (b2 >> 6)];
-    out += b2 === undefined ? '=' : BASE64_ALPHABET[b2 & 0x3f];
+    if (b1 === undefined) {
+      // One trailing byte: its low bits still form a real character.
+      out += `${BASE64_ALPHABET[(b0 & 0x03) << 4]}==`;
+      return out;
+    }
+    out += BASE64_ALPHABET[((b0 & 0x03) << 4) | (b1 >> 4)];
+    if (b2 === undefined) {
+      // Two trailing bytes: the second character carries real bits too.
+      out += `${BASE64_ALPHABET[(b1 & 0x0f) << 2]}=`;
+      return out;
+    }
+    out += BASE64_ALPHABET[((b1 & 0x0f) << 2) | (b2 >> 6)];
+    out += BASE64_ALPHABET[b2 & 0x3f];
   }
   return out;
 }
