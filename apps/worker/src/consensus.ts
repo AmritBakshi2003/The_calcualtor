@@ -17,7 +17,9 @@
 
 import { normalize } from '@calculator-suite/math-core';
 import type { KVNamespace } from '@cloudflare/workers-types';
+import type { FetchLike } from './env';
 import { ApiError } from './http';
+import { GeminiApiError, generateContent } from './gemini';
 import { parseImageField } from './ocrspace';
 import type { AllowedImageMime } from './recognize';
 
@@ -198,4 +200,191 @@ export function parseConsensusImage(
     throw new ApiError(400, 'VALIDATION_ERROR', 'image is required.');
   }
   return parseImageField(image, explicitMime, 'image', 3 * 1024 * 1024);
+}
+
+// ---------------------------------------------------------------------------
+// Step 3: the Gemini arbiter — called ONLY on needs_arbiter.
+// ---------------------------------------------------------------------------
+
+export const ARBITER_PRIMARY_MODEL = 'gemini-3.5-flash-lite';
+export const ARBITER_SECOND_MODEL = 'gemini-3.8-flash';
+export const ARBITER_MAX_OUTPUT_TOKENS = 200;
+/** The arbiter's input image must already be resized to this long side. */
+export const ARBITER_IMAGE_MAX_SIDE = 1024;
+
+/**
+ * Image dimensions from the bytes (PNG IHDR, JPEG SOF markers) so the
+ * server can enforce the 1024px-long-side arbiter limit without a canvas.
+ * Returns null for unknown formats (e.g. WebP) — those are trusted to the
+ * client's resize step.
+ */
+export function imageDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return { width: view.getUint32(16), height: view.getUint32(20) };
+  }
+  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let i = 2;
+    while (i + 9 < bytes.length) {
+      if (bytes[i] !== 0xff) {
+        i++;
+        continue;
+      }
+      const marker = bytes[i + 1];
+      if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd9)) {
+        i += 2;
+        continue;
+      }
+      const length = (bytes[i + 2] << 8) | bytes[i + 3];
+      const isSof =
+        marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+      if (isSof) {
+        return {
+          height: (bytes[i + 5] << 8) | bytes[i + 6],
+          width: (bytes[i + 7] << 8) | bytes[i + 8],
+        };
+      }
+      i += 2 + length;
+    }
+  }
+  return null;
+}
+
+const ARBITER_SYSTEM_INSTRUCTION =
+  'You read arithmetic expressions from images of calculator screens, paper and screenshots. ' +
+  'Answer with the requested JSON object only — no prose, no Markdown fences.';
+
+/**
+ * The arbiter payload: read the expression from the image YOURSELF; the
+ * candidates may be wrong; answer only JSON.
+ */
+export function buildArbiterPrompt(topCandidates: RankedCandidate[]): string {
+  const lines = topCandidates
+    .map(
+      (c, i) =>
+        `${i + 1}. "${c.expression}" (confidence ${Math.round(c.confidence)}, source ${c.sources.join(' + ')})`
+    )
+    .join('\n');
+  return (
+    'Read the arithmetic expression from the image yourself. ' +
+    'The candidate readings below may be wrong — trust your own reading of the image.\n\n' +
+    `Candidate readings:\n${lines || '(none)'}\n\n` +
+    'Answer ONLY a JSON object, no other text:\n' +
+    '{"expression": string, "confidence": number, "alternatives": string[]}\n' +
+    'expression: what is printed in the image (digits and + - * / x × ÷ ( ) . =). ' +
+    'confidence: 0-100. alternatives: other plausible readings, possibly empty.'
+  );
+}
+
+export interface ArbiterAnswer {
+  /** The arbiter's own reading. */
+  expression: string;
+  /** 0-100, clamped; missing/invalid becomes 0. */
+  confidence: number;
+  alternatives: string[];
+}
+
+export class ArbiterParseError extends Error {}
+
+/**
+ * Parse the arbiter answer defensively: tolerate Markdown fences and stray
+ * prose around the JSON object, validate every field, clamp confidence.
+ * Throws ArbiterParseError on anything unusable — never trusts the model.
+ */
+export function parseArbiterAnswer(text: string): ArbiterAnswer {
+  let cleaned = text.trim();
+  if (cleaned.startsWith('```')) {
+    const lines = cleaned.split('\n');
+    if (lines.length > 0 && lines[0].startsWith('```')) lines.shift();
+    while (lines.length > 0 && lines[lines.length - 1].trim().startsWith('```')) lines.pop();
+    cleaned = lines.join('\n').trim();
+  }
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start === -1 || end <= start) {
+    throw new ArbiterParseError('no JSON object in the answer');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned.slice(start, end + 1));
+  } catch {
+    throw new ArbiterParseError('answer is not valid JSON');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new ArbiterParseError('answer is not a JSON object');
+  }
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.expression !== 'string' || !record.expression.trim()) {
+    throw new ArbiterParseError('answer has no usable expression');
+  }
+  const alternatives = Array.isArray(record.alternatives)
+    ? record.alternatives
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .slice(0, 5)
+    : [];
+  return {
+    expression: record.expression.trim(),
+    confidence: clampConfidence(record.confidence),
+    alternatives,
+  };
+}
+
+export type ArbiterCallStatus = 'match' | 'no_match' | 'parse_failed' | 'busy' | 'error';
+
+export interface ArbiterCallResult {
+  status: ArbiterCallStatus;
+  model: string;
+  /** Present when status is match/no_match: the normalized answer. */
+  answer?: ArbiterAnswer & { expression: string };
+}
+
+/**
+ * One arbiter model call. temperature 0 and the 200-token cap are set per
+ * call; a 5xx is retried once INSIDE generateContent (never a 429 — that is
+ * surfaced as 'busy' so the caller can stop for the day); a 404/other
+ * failure is a plain 'error'. The answer is normalized and matched against
+ * the candidate expressions here.
+ */
+export async function callArbiterModel(
+  env: { GEMINI_API_KEY?: string; GEMINI_MODEL?: string },
+  model: string,
+  image: { base64: string; mime: AllowedImageMime },
+  prompt: string,
+  candidateExpressions: string[],
+  options: { fetchImpl?: FetchLike } = {}
+): Promise<ArbiterCallResult> {
+  try {
+    const text = await generateContent(
+      env,
+      {
+        parts: [
+          { inline_data: { mime_type: image.mime, data: image.base64 } },
+          { text: prompt },
+        ],
+        systemInstruction: ARBITER_SYSTEM_INSTRUCTION,
+      },
+      { fetchImpl: options.fetchImpl, model, maxOutputTokens: ARBITER_MAX_OUTPUT_TOKENS }
+    );
+    try {
+      const answer = parseArbiterAnswer(text);
+      const normalized = normalize(answer.expression);
+      if (!normalized) {
+        // The model answered, but outside the scan alphabet: unusable.
+        return { status: 'parse_failed', model };
+      }
+      return {
+        status: candidateExpressions.includes(normalized) ? 'match' : 'no_match',
+        model,
+        answer: { ...answer, expression: normalized },
+      };
+    } catch {
+      return { status: 'parse_failed', model };
+    }
+  } catch (error) {
+    if (error instanceof GeminiApiError && error.code === 'rate_limited') {
+      // 429: no retry. The caller marks Gemini busy.
+      return { status: 'busy', model };
+    }
+    return { status: 'error', model };
+  }
 }

@@ -208,7 +208,10 @@ async function callGeminiOnce(
         body: JSON.stringify({
           contents: [{ role: 'user', parts: payload.parts }],
           systemInstruction: { parts: [{ text: payload.systemInstruction }] },
-          generationConfig: { temperature: 0, maxOutputTokens: MAX_OUTPUT_TOKENS },
+          generationConfig: {
+            temperature: 0,
+            maxOutputTokens: options.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
+          },
         }),
         signal: controller.signal,
       }
@@ -265,14 +268,24 @@ async function callGeminiOnce(
 export async function generateContent(
   env: GeminiEnv,
   payload: GeminiRequestPayload,
-  options: { fetchImpl?: FetchLike; timeoutMs?: number; telemetry?: GeminiTelemetry } = {}
+  options: {
+    fetchImpl?: FetchLike;
+    timeoutMs?: number;
+    telemetry?: GeminiTelemetry;
+    /** Per-call model pin; overrides GEMINI_MODEL for this call only. */
+    model?: string;
+    /** Per-call output cap (default MAX_OUTPUT_TOKENS). */
+    maxOutputTokens?: number;
+  } = {}
 ): Promise<string> {
   const apiKey = env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
     throw new GeminiApiError('gemini_not_configured', 503, 'GEMINI_API_KEY is not set.');
   }
 
-  const userModel = env.GEMINI_MODEL?.trim();
+  // A per-call model pin counts as an operator pin: 404/503 must NOT
+  // silently swap models for a caller that asked for a specific one.
+  const userModel = options.model?.trim() || env.GEMINI_MODEL?.trim();
   let model = userModel || DEFAULT_MODEL_ID;
 
   for (let attempt = 0; ; attempt += 1) {
