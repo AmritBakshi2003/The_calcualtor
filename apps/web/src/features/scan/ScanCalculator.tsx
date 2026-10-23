@@ -1,25 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { evaluateExpression } from '@calculator-suite/math-core';
-import Tesseract from 'tesseract.js';
 import { CameraCapture } from './CameraCapture';
 import { CropEditor } from './CropEditor';
-import { useOCRWorker, OCR_DEFAULT_PARAMS } from './useOCRWorker';
+import { useOCRWorker } from './useOCRWorker';
 import { preprocessForOCR } from './ocrPreprocess';
-import { ambiguousSubstitutions, postprocessOCR, cleanForEvaluation } from './ocrPostprocess';
+import { postprocessOCR, cleanForEvaluation } from './ocrPostprocess';
 import { rotateCanvas90 } from './imageUtils';
 import {
-  WHITELIST_CONFIDENCE_FALLBACK,
-  expressionScore,
   lowConfidenceSymbolCount,
   pickBestCandidate,
-  rankSegments,
-  toSegments,
-  type BBox,
   type OcrCandidate,
-  type OcrSegment,
 } from './ocrScoring';
+import { recognizeScanCandidates, type ScanCandidate } from './ocr/recognize';
 import { isBlurry } from './blurDetection';
-import { classifyPlusOrDivide } from './glyphCheck';
 import {
   fetchGeminiCapabilities,
   GeminiUnavailableError,
@@ -154,36 +147,6 @@ export function ScanCalculator() {
     img.src = imageData;
   };
 
-  interface PassOptions {
-    psm?: Tesseract.PSM;
-    /** '' runs the pass WITHOUT the whitelist (it is the worker default). */
-    whitelist?: string;
-  }
-
-  const performOCR = async (imageData: string, options: PassOptions = {}): Promise<Tesseract.RecognizeResult> => {
-    const worker = await getWorker();
-
-    const overrides: Partial<Tesseract.WorkerParams> = {};
-    if (options.psm !== undefined) overrides.tessedit_pageseg_mode = options.psm;
-    if (options.whitelist !== undefined) overrides.tessedit_char_whitelist = options.whitelist;
-    const hasOverrides = Object.keys(overrides).length > 0;
-
-    try {
-      if (hasOverrides) await worker.setParameters(overrides);
-      return await worker.recognize(imageData);
-    } finally {
-      // Always restore defaults, even if recognition threw, so one failed pass
-      // cannot leave the shared worker stuck in a different mode.
-      if (hasOverrides) {
-        try {
-          await worker.setParameters(OCR_DEFAULT_PARAMS);
-        } catch {
-          // Nothing more to do; the next pass sets what it needs.
-        }
-      }
-    }
-  };
-
   /**
    * Copy the local OCR machinery untouched; when the same-origin Gemini
    * layer is available, its answer is cross-checked against the local
@@ -193,177 +156,29 @@ export function ScanCalculator() {
   /** Raw OCR text -> expression the evaluator accepts. */
   const toExpression = (raw: string) => cleanForEvaluation(postprocessOCR(raw.trim()));
 
-  /** The confidence a recognize result reports, clamped to a sane range. */
-  const passConfidence = (data: Tesseract.RecognizeResult['data']): { text: string; confidence: number } => ({
-    text: data.text,
-    confidence: Math.max(0, Math.min(100, data.confidence ?? 0)),
+  /** Map a Phase-1 scan candidate onto the candidate shape the component ranks. */
+  const toComponentCandidate = (candidate: ScanCandidate): OcrCandidate => ({
+    source: 'variant',
+    expression: candidate.expression,
+    confidence: candidate.confidence,
+    confidenceKnown: candidate.confidenceKnown,
+    score: candidate.score,
+    segment: candidate.segment,
+    substitutions: candidate.substitutions,
+    rawText: candidate.rawText,
   });
 
-  /** Copy one line out of the preprocessed canvas, with breathing room. */
-  const cropToBbox = (source: HTMLCanvasElement, bbox: BBox): HTMLCanvasElement => {
-    const pad = Math.max(6, Math.round((bbox.y1 - bbox.y0) * 0.6));
-    const x = Math.max(0, bbox.x0 - pad);
-    const y = Math.max(0, bbox.y0 - pad);
-    const width = Math.max(1, Math.min(source.width - x, bbox.x1 - bbox.x0 + pad * 2));
-    const height = Math.max(1, Math.min(source.height - y, bbox.y1 - bbox.y0 + pad * 2));
-
-    const out = document.createElement('canvas');
-    out.width = width;
-    out.height = height;
-    out.getContext('2d')?.drawImage(source, x, y, width, height, 0, 0, width, height);
-    return out;
-  };
-
   /**
-   * Tesseract reads "÷" as "+" on phone photos, and the wrong operator
-   * silently evaluates "144÷12" as 156 instead of 12. For the winning
-   * candidate only: re-check each "+" glyph's pixels and swap in "/" where
-   * the shape says divide. Applied only when every "+" symbol maps 1:1 onto
-   * a "+" in the expression, so a partial match cannot corrupt the text.
-   *
-   * Symbol boxes come from the block pass over the preprocessed image, so the
-   * base canvas is the preprocessed one in every case (including 'crop').
+   * Recognize via the Phase-1 pipeline: three preprocessing variants
+   * (grayscale, Otsu, Sauvola), each read with PSM 7 and PSM 13 under the
+   * LSTM engine and the scan whitelist — at most 6 recognitions per scan —
+   * then normalize, score and rank the readings. Returns the best candidate,
+   * or null when no variant produced a valid expression (the caller reloads
+   * the engine and retries once).
    */
-  const refinePlusOrDivide = (baseCanvas: HTMLCanvasElement, candidate: OcrCandidate | null): OcrCandidate | null => {
-    if (!candidate?.expression || !candidate.segment?.symbols) return candidate;
-    const plusSymbols = candidate.segment.symbols.filter((symbol) => symbol.text === '+');
-    const plusChars = (candidate.expression.match(/\+/g) ?? []).length;
-    if (plusSymbols.length === 0 || plusSymbols.length !== plusChars) return candidate;
-    if (plusSymbols.some((symbol) => !symbol.bbox)) return candidate;
-
-    const ctx = baseCanvas.getContext('2d');
-    if (!ctx) return candidate;
-
-    let expression = candidate.expression;
-    let changed = false;
-    let plusIndex = 0;
-    for (const symbol of plusSymbols) {
-      const bbox = symbol.bbox!;
-      const padX = Math.round((bbox.x1 - bbox.x0) * 0.15);
-      const padY = Math.round((bbox.y1 - bbox.y0) * 0.15);
-      const x = Math.max(0, bbox.x0 - padX);
-      const y = Math.max(0, bbox.y0 - padY);
-      const width = Math.max(1, Math.min(baseCanvas.width - x, bbox.x1 - bbox.x0 + 1 + padX * 2));
-      const height = Math.max(1, Math.min(baseCanvas.height - y, bbox.y1 - bbox.y0 + 1 + padY * 2));
-
-      let gray: ImageData;
-      try {
-        gray = ctx.getImageData(x, y, width, height);
-      } catch {
-        // Cross-origin canvases throw; fall back to the uncorrected reading.
-        return candidate;
-      }
-      if (classifyPlusOrDivide(gray) !== 'divide') {
-        plusIndex++;
-        continue;
-      }
-
-      // Replace the plusIndex-th "+" char with "/" (the cleaned form of "÷").
-      let seen = -1;
-      expression = expression.replace(/\+/g, () => {
-        seen++;
-        return seen === plusIndex ? '/' : '+';
-      });
-      changed = true;
-      plusIndex++;
-    }
-
-    if (!changed) return candidate;
-    const improved = {
-      ...candidate,
-      expression,
-      score: expressionScore(expression, candidate.confidence, expression),
-    };
-    // A "\u00f7" misread as a broken plus would turn into an expression that no
-    // longer parses; keep whichever reading scored better.
-    return improved.score >= candidate.score ? improved : candidate;
-  };
-
-  /** Run every OCR pass over a preprocessed image and return the best candidate. */
   const runRecognition = async (preprocessedCanvas: HTMLCanvasElement): Promise<OcrCandidate | null> => {
-    // PNG (lossless) preserves crisp digit edges; JPEG artifacts degrade OCR.
-    const preprocessedImageData = preprocessedCanvas.toDataURL('image/png');
-
-    const candidates: OcrCandidate[] = [];
-    /** Confidence depending on whether the pass could actually report one. */
-    const honestConfidence = (
-      pass: { text: string; confidence: number },
-      confidenceKnown: boolean
-    ): { confidence: number; confidenceKnown: boolean } => {
-      const reads = pass.confidence > 0;
-      return {
-        confidence: reads ? pass.confidence : WHITELIST_CONFIDENCE_FALLBACK,
-        confidenceKnown: confidenceKnown && reads,
-      };
-    };
-    const consider = (
-      source: OcrCandidate['source'],
-      raw: string,
-      pass: { text: string; confidence: number },
-      confidenceKnown: boolean,
-      segment?: OcrSegment
-    ) => {
-      const expression = toExpression(raw);
-      const honest = honestConfidence(pass, confidenceKnown);
-      candidates.push({
-        source,
-        expression,
-        confidence: honest.confidence,
-        confidenceKnown: honest.confidenceKnown,
-        segment,
-        // Record WHICH look-alikes were auto-corrected so the UI can warn.
-        substitutions: expression ? ambiguousSubstitutions(raw) : [],
-        score: expressionScore(expression, honest.confidence, raw),
-        rawText: raw,
-      });
-    };
-
-    // 1) Block pass, whitelist on: also segments the image into lines, which
-    // is what lets us find the expression on a receipt or a screenshot full of
-    // other numbers. Whitelist confidence is a reporting quirk (always 0) —
-    // see useOCRWorker.ts.
-    const block = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_BLOCK });
-    const ranked = rankSegments(toSegments(block));
-
-    consider('block', block.data.text, passConfidence(block.data), false, ranked[0]);
-    for (const line of ranked.slice(0, 3)) {
-      consider('line', line.text, { text: line.text, confidence: line.confidence }, false, line);
-    }
-
-    // 2) Block pass, whitelist off: real confidence, and the only pass that can
-    // emit glyphs outside OCR_WHITELIST ("2+3" reads as "iy" without one, but
-    // the matched-to-whitelist reading can also be wrong).
-    const blockOpen = await performOCR(preprocessedImageData, {
-      psm: Tesseract.PSM.SINGLE_BLOCK,
-      whitelist: '',
-    });
-    const rankedOpen = rankSegments(toSegments(blockOpen));
-    consider('block-open', blockOpen.data.text, passConfidence(blockOpen.data), true, rankedOpen[0]);
-    for (const line of rankedOpen.slice(0, 3)) {
-      consider('line-open', line.text, { text: line.text, confidence: line.confidence }, true, line);
-    }
-
-    // Re-read the winning line on its own: neighbouring text pulls the
-    // recognizer towards the wrong glyphs even when segmentation was right.
-    if (ranked.length > 1 && ranked[0].bbox) {
-      const cropped = cropToBbox(preprocessedCanvas, ranked[0].bbox);
-      const cropResult = await performOCR(cropped.toDataURL('image/png'), {
-        psm: Tesseract.PSM.SINGLE_LINE,
-      });
-      consider('crop', cropResult.data.text, passConfidence(cropResult.data), false, ranked[0]);
-    }
-
-    let best = pickBestCandidate(candidates);
-
-    // Last resort: one line over the whole image. Photos with a busy
-    // background sometimes segment into fragments the block pass garbles.
-    if (!best || best.score < 25) {
-      const single = await performOCR(preprocessedImageData, { psm: Tesseract.PSM.SINGLE_LINE });
-      consider('fallback', single.data.text, passConfidence(single.data), false, ranked[0]);
-      best = pickBestCandidate(candidates) ?? best;
-    }
-
-    return refinePlusOrDivide(preprocessedCanvas, best);
+    const scanCandidates = await recognizeScanCandidates(preprocessedCanvas, getWorker);
+    return pickBestCandidate(scanCandidates.map(toComponentCandidate));
   };
 
   const handleRecognize = async () => {
@@ -410,7 +225,9 @@ export function ScanCalculator() {
       // Classic local pipeline first — it is instant, offline, and produces
       // the OCR hint (or the fallback flag) the vision layer cross-examines.
       const localBest = best;
-      let processedText = localBest?.expression ?? '';
+      // Candidates carry the normalized ×/÷ form; the evaluator and the edit
+      // box take the ASCII-cleaned form ("2×3" -> "2*3", "2+3=5" -> "2+3").
+      let processedText = localBest ? toExpression(localBest.expression) : '';
       let source: 'gemini' | 'local' | null = processedText ? 'local' : null;
       let disagreement = false;
 

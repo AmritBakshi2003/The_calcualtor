@@ -13,9 +13,16 @@
  */
 import Tesseract from 'tesseract.js';
 import { OCR_DEFAULT_PARAMS } from '../useOCRWorker';
-import { rankSegments, toSegments, type OcrSegment } from '../ocrScoring';
+import {
+  WHITELIST_CONFIDENCE_FALLBACK,
+  expressionScore,
+  rankSegments,
+  toSegments,
+  type OcrSegment,
+} from '../ocrScoring';
+import { classifyPlusOrDivide } from '../glyphCheck';
 import { buildVariants, type OcrVariantName } from './preprocess';
-import { SCAN_WHITELIST } from './normalize';
+import { normalize, SCAN_WHITELIST } from './normalize';
 
 /** PSMs the variants run under: 7 = single text line, 13 = raw line. */
 export const SCAN_PSMS = [7, 13] as const;
@@ -100,9 +107,144 @@ export async function runVariantPasses(
         }
       }
 
-      results.push({ rawText, confidence, variant: variant.name, psm, segment });
+      results.push({
+        rawText: correctDivideMisreads(rawText, variant.canvas, segment),
+        confidence,
+        variant: variant.name,
+        psm,
+        segment,
+      });
     }
   }
 
   return results;
+}
+
+/**
+ * Tesseract reads "÷" as "+" on phone photos, and the wrong operator
+ * silently evaluates "144÷12" as 156 instead of 12. Port of the scanner's
+ * glyph re-check (ScanCalculator.refinePlusOrDivide), now applied per pass
+ * at the RAW text level: the pass's symbol boxes are relative to ITS OWN
+ * variant canvas, so cropping that canvas is geometrically valid — which the
+ * old single-canvas version could not guarantee across scaled variants.
+ *
+ * Only applied when every "+" symbol maps 1:1 onto a "+" in the raw text, so
+ * a partial match cannot corrupt it; a correction that fails to normalize is
+ * discarded (the uncorrected reading stands).
+ */
+function correctDivideMisreads(raw: string, canvas: HTMLCanvasElement, segment?: OcrSegment): string {
+  if (!segment?.symbols) return raw;
+  const plusSymbols = segment.symbols.filter((symbol) => symbol.text === '+');
+  const plusChars = (raw.match(/\+/g) ?? []).length;
+  if (plusSymbols.length === 0 || plusSymbols.length !== plusChars) return raw;
+  if (plusSymbols.some((symbol) => !symbol.bbox)) return raw;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return raw;
+
+  let corrected = raw;
+  let changed = false;
+  let plusIndex = 0;
+  for (const symbol of plusSymbols) {
+    const bbox = symbol.bbox!;
+    const padX = Math.round((bbox.x1 - bbox.x0) * 0.15);
+    const padY = Math.round((bbox.y1 - bbox.y0) * 0.15);
+    const x = Math.max(0, bbox.x0 - padX);
+    const y = Math.max(0, bbox.y0 - padY);
+    const width = Math.max(1, Math.min(canvas.width - x, bbox.x1 - bbox.x0 + 1 + padX * 2));
+    const height = Math.max(1, Math.min(canvas.height - y, bbox.y1 - bbox.y0 + 1 + padY * 2));
+
+    let gray: ImageData;
+    try {
+      gray = ctx.getImageData(x, y, width, height);
+    } catch {
+      // Cross-origin canvases throw; keep the uncorrected reading.
+      return raw;
+    }
+    if (classifyPlusOrDivide(gray) !== 'divide') {
+      plusIndex++;
+      continue;
+    }
+
+    // Replace the plusIndex-th "+" char with "÷" (normalized division).
+    let seen = -1;
+    corrected = corrected.replace(/\+/g, () => {
+      seen++;
+      return seen === plusIndex ? '÷' : '+';
+    });
+    changed = true;
+    plusIndex++;
+  }
+
+  if (!changed) return raw;
+  // A "÷" misread as a broken plus could turn into an expression that no
+  // longer parses; keep whichever reading survived normalization.
+  return normalize(corrected) !== null ? corrected : raw;
+}
+
+/**
+ * A Phase-1 candidate: one cleaned reading of one variant under one PSM.
+ */
+export interface ScanCandidate {
+  /** Cleaned expression (the ×/÷ display alphabet), '' when normalize failed. */
+  expression: string;
+  /** The raw pre-cleaning pass output (the cross-check hint sent to Gemini). */
+  rawText: string;
+  /** Pass confidence; a whitelist pass's 0 is replaced by the fallback value. */
+  confidence: number;
+  /** False when the pass's confidence is the whitelist reporting quirk (0). */
+  confidenceKnown: boolean;
+  variant: OcrVariantName;
+  psm: ScanPsm;
+  /** Ranking score (see expressionScore); -Infinity when nothing parsed. */
+  score: number;
+  /** Best-ranked line segment, for the low-confidence glyph UI. */
+  segment?: OcrSegment;
+  /** Ambiguous characters this pass auto-corrected, e.g. ["O→0"]. */
+  substitutions: string[];
+}
+
+/**
+ * Rank candidates best-first. Ties keep collection order (variant, then PSM)
+ * because Array#sort is stable, so identical scores stay predictable.
+ */
+export function rankScanCandidates(candidates: ScanCandidate[]): ScanCandidate[] {
+  return [...candidates].sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Turn the raw variant passes into ranked candidates: normalize each reading,
+ * score it (whitelist confidence 0 is a reporting quirk, so it is scored as
+ * WHITELIST_CONFIDENCE_FALLBACK while `confidenceKnown` stays false), and
+ * sort best-first. The caller picks the winner and decides what empty
+ * results mean (engine reload + retry).
+ */
+export async function recognizeScanCandidates(
+  canvas: HTMLCanvasElement,
+  getWorker: () => Promise<RecognizerWorker>
+): Promise<ScanCandidate[]> {
+  const passes = await runVariantPasses(canvas, getWorker);
+
+  const candidates: ScanCandidate[] = passes.map((pass) => {
+    const reads = pass.confidence > 0;
+    const confidence = reads ? pass.confidence : WHITELIST_CONFIDENCE_FALLBACK;
+    const expression = normalize(pass.rawText) ?? '';
+    return {
+      expression,
+      rawText: pass.rawText,
+      confidence,
+      confidenceKnown: reads,
+      variant: pass.variant,
+      psm: pass.psm,
+      score: expressionScore(expression, confidence, pass.rawText),
+      segment: pass.segment,
+      // The whitelist-only pipeline cannot substitute look-alike letters:
+      // characters outside the scan alphabet are DROPPED by normalize, never
+      // swapped ("2O5" -> "25"), so there is no honest "O→0" correction to
+      // report and the ambiguity warning cannot trigger.
+      substitutions: [],
+    };
+  });
+
+  return rankScanCandidates(candidates);
 }

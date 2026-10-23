@@ -44,7 +44,7 @@ export interface OcrSegment {
 
 export interface OcrCandidate {
   /** Where the text came from, kept for debugging and tests. */
-  source: 'block' | 'line' | 'block-open' | 'line-open' | 'crop' | 'fallback';
+  source: 'block' | 'line' | 'block-open' | 'line-open' | 'crop' | 'fallback' | 'variant';
   /** Text after cleanForEvaluation. */
   expression: string;
   confidence: number;
