@@ -234,6 +234,7 @@ export default {
         // Phase-3 pipeline: SHA-256 image cache -> decide() -> (arbiter).
         // Only input validation throws; everything else degrades softly
         // inside the result (verified:false + stages).
+        guardScan(request, url);
         const body = await readScanBody(request, url);
         assertScanImageMime(body);
         return jsonResponse(200, await handleConsensusBody(body, env));
