@@ -62,8 +62,16 @@ export function classifyPlusOrDivide(gray: ImageData): 'plus' | 'divide' | 'unkn
     components.push({ area, x0, y0, x1, y1 });
   }
 
-  // Specks (scan noise, JPEG debris) are not glyph parts.
-  const kept = components.filter((c) => c.area >= totalPixels * 0.03);
+  // Specks (scan noise, JPEG debris) are not glyph parts. The floor is
+  // relative to the largest component (the bar), not the crop area: the crop
+  // pads the symbol box by 15%, and on narrow fonts (Roboto Mono, Open Sans)
+  // the ÷ dots are only ~60px² while the padded crop is ~2800px², so a
+  // fraction of the CROP area swallows the dots and a divide reads as a plus.
+  // Real dots are >=20% of the bar they sit on; debris next to a glyph is
+  // under 3% of it, so an 8% floor keeps the dots and drops the noise.
+  const bar = components.length > 0 ? components.reduce((a, b) => (a.area >= b.area ? a : b)) : null;
+  const floor = bar ? bar.area * 0.08 : Infinity;
+  const kept = components.filter((c) => c.area >= floor);
 
   if (kept.length === 1) return 'plus';
   if (kept.length !== 3) return 'unknown';

@@ -45,7 +45,8 @@ describe('classifyPlusOrDivide', () => {
   });
 
   it('returns unknown when noise drops below the speck threshold', () => {
-    // Two tiny 4x4 specks: below the 3% minimum, so they are noise not dots.
+    // Two tiny 4x4 specks: well under 8% of each other (the largest part),
+    // so they are noise not dots and there is no bar to sit on.
     const noise = makeImage(60, 60, (x, y) => {
       const a = y >= 5 && y < 9 && x >= 5 && x < 9;
       const b = y >= 50 && y < 54 && x >= 50 && x < 54;
@@ -62,6 +63,20 @@ describe('classifyPlusOrDivide', () => {
       return bar || dotTop || dotBottom;
     });
     expect(classifyPlusOrDivide(off)).toBe('unknown');
+  });
+
+  it('keeps small dots when the padded crop dwarfs them (monospace ÷)', () => {
+    // Real failure: refine pads the symbol box 15%, making a 52x53 crop for
+    // Roboto Mono's ÷. Its dots are 8x8 (~64px²) — under the old 3%-of-crop
+    // floor (82px²) both were dropped and the glyph read as a plus, so
+    // "144÷12" silently evaluated as 156. The bar-relative floor keeps them.
+    const padded = makeImage(52, 53, (x, y) => {
+      const bar = y >= 22 && y < 30 && x >= 6 && x < 45;
+      const dotTop = y >= 6 && y < 14 && x >= 21 && x < 29;
+      const dotBottom = y >= 38 && y < 46 && x >= 21 && x < 29;
+      return bar || dotTop || dotBottom;
+    });
+    expect(classifyPlusOrDivide(padded)).toBe('divide');
   });
 
   it('returns unknown for two components (broken divide)', () => {
