@@ -27,9 +27,15 @@ import {
 import {
   RECOGNIZE_SYSTEM_INSTRUCTION,
   SOLVE_SYSTEM_INSTRUCTION,
+  VERIFY_SYSTEM_INSTRUCTION,
   buildRecognitionUserPayload,
+  buildVerifyUserPayload,
 } from './prompts';
-import { buildRecognizeResult, parseRecognizeRequest } from './recognize';
+import {
+  buildRecognizeResult,
+  mergedDigitsSuspect,
+  parseRecognizeRequest,
+} from './recognize';
 import { assertClientEvaluable, buildSolveResult, parseSolveRequest } from './solve';
 
 /** Per-client flood guard: 60 Gemini calls per 10 minutes per IP. */
@@ -44,16 +50,77 @@ function guard(request: Request, url: URL): void {
   }
 }
 
+interface RecognizeImages {
+  image: string;
+  mime: string;
+  enhanced?: string | null;
+}
+
+/** Model parts: original photo first (truth), then the enhanced crop, then text. */
+function recognizeParts(images: RecognizeImages, hint: string | null): object[] {
+  const parts: object[] = [{ inline_data: { mime_type: images.mime, data: images.image } }];
+  if (images.enhanced) {
+    parts.push({ inline_data: { mime_type: 'image/png', data: images.enhanced } });
+  }
+  parts.push({ text: buildRecognitionUserPayload(hint) });
+  return parts;
+}
+
+/** Verify parts: the same images, plus the candidate to cross-examine. */
+function verifyParts(images: RecognizeImages, candidate: string): object[] {
+  const parts: object[] = [{ inline_data: { mime_type: images.mime, data: images.image } }];
+  if (images.enhanced) {
+    parts.push({ inline_data: { mime_type: 'image/png', data: images.enhanced } });
+  }
+  parts.push({ text: buildVerifyUserPayload(candidate) });
+  return parts;
+}
+
 async function handleRecognize(request: Request, env: WorkerEnv): Promise<Response> {
   const body = parseRecognizeRequest(await readJsonBody(request));
   const modelText = await generateContent(env, {
-    parts: [
-      { inline_data: { mime_type: body.mime, data: body.image } },
-      { text: buildRecognitionUserPayload(body.hint) },
-    ],
+    parts: recognizeParts(body, body.hint),
     systemInstruction: RECOGNIZE_SYSTEM_INSTRUCTION,
   });
-  return jsonResponse(200, buildRecognizeResult(modelText));
+  const first = buildRecognizeResult(modelText);
+  // UNREADABLE needs no gate — there is nothing to verify.
+  if (first.unreadable) return jsonResponse(200, first);
+
+  // Trust gate — pass 2: another, independent read that cross-examines the
+  // candidate glyph-by-glyph against the ink. It corrects residual errors
+  // (merged digit groups, dropped operators) and is the reason an expression
+  // only ships to the browser when two readings agree or one fixed the other.
+  try {
+    const verifyText = await generateContent(env, {
+      parts: verifyParts(body, first.expression),
+      systemInstruction: VERIFY_SYSTEM_INSTRUCTION,
+    });
+    if (verifyText.trim().toUpperCase().includes('UNREADABLE')) {
+      // Pass 2 could not confirm math in the image: do NOT ship the candidate
+      // as if it were verified. Keep it visible but flag it unverified.
+      return jsonResponse(200, { ...first, verified: false });
+    }
+    const verified = buildRecognizeResult(verifyText);
+    if (verified.unreadable) {
+      // Same principle: keep the candidate, mark it unverified.
+      return jsonResponse(200, { ...first, verified: false });
+    }
+    if (verified.expression === first.expression) {
+      return jsonResponse(200, { ...verified, verified: true });
+    }
+    // Pass 2 corrected pass 1 (or vice versa): the corrected reading is
+    // itself an independent ink-backed read, so it ships verified.
+    return jsonResponse(200, { ...verified, verified: true });
+  } catch {
+    // Pass 2 is an accuracy gate, not a hard dependency: when it fails
+    // (rate limit, timeout) fall back to pass 1 but run the merged-digits
+    // gate — an operator-bearing payload with an operator-less result is the
+    // classic silent corruption, and nothing outranks nothing.
+    if (mergedDigitsSuspect(body.hint, first.expression)) {
+      return jsonResponse(200, { expression: '', source: 'gemini', unreadable: true });
+    }
+    return jsonResponse(200, { ...first, verified: false });
+  }
 }
 
 async function handleSolve(request: Request, env: WorkerEnv): Promise<Response> {
@@ -76,7 +143,11 @@ function mapGeminiError(error: GeminiApiError): ApiError {
     case 'timeout':
       return new ApiError(504, 'gemini_timeout', 'Gemini did not answer in time.');
     default:
-      return new ApiError(502, 'gemini_error', 'Gemini request failed.');
+      // GeminiApiError.detail carries only technical-safe facts (e.g. the
+      // numeric upstream HTTP status) so a 502 in the browser immediately
+      // betrays its cause: 401/403 = bad key, 404 = model unavailable, 500/503
+      // = Google-side failure.
+      return new ApiError(502, 'gemini_error', `Gemini request failed. ${error.detail}`);
   }
 }
 

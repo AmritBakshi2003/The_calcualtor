@@ -88,6 +88,30 @@ curl https://<your-worker-domain>/api/health            # -> {"ok":true}
 curl https://<your-worker-domain>/api/scan/capabilities # -> {"gemini":true} when the key is live
 ```
 
+Or run the built-in check, which also tells you explicitly when the Worker is serving
+HTML instead of JSON (the `/api/*` routing bug) and when the key is missing from the
+**deployed** environment (the silent local-only scanner):
+
+```bash
+npm run test:deploy-check -- https://<your-worker-domain>
+```
+
+### Scanner accuracy ground truth (photos → expected expressions)
+
+```bash
+# 1. Start the environment you want to grade:
+npx wrangler dev --config wrangler.jsonc          # local, needs apps/worker/.dev.vars GEMINI_API_KEY
+# 2. Photograph handwritten expressions and name each file after its answer:
+#      tests/scan-fixtures/189+82.png
+#      tests/scan-fixtures/99+99/9.jpg        (slash names division ÷)
+# 3. Run the harness (with --strict, only server-verified readings count as pass):
+npm run test:scan -- http://127.0.0.1:8787 tests/scan-fixtures --strict
+```
+
+A photo passes only when the returned expression is an exact normalized match
+(spacing/×/÷ normalized); with `--strict`, additionally when the Server's second
+verification pass confirmed the reading against the ink.
+
 Both must return JSON. HTML means the `/api/*` routing is not active (see the warning
 above). With `gemini: true`, the Scan tab shows the "✨ Powered by Google Gemini"
 badge and recognition is cross-validated by Gemini.

@@ -56,6 +56,9 @@ export function ScanCalculator() {
   // Degradation notice when the Gemini call did not succeed (missing key,
   // rate limit, offline). Local recognition continues to carry the scan.
   const [geminiMessage, setGeminiMessage] = useState<string | null>(null);
+  // False when Gemini read something but its independent verification pass
+  // could not confirm it against the ink — the result ships but is flagged.
+  const [geminiVerified, setGeminiVerified] = useState(false);
   // True while a Gemini solve call is in flight.
   const [geminiBusy, setGeminiBusy] = useState(false);
   // True when the displayed result was computed by Gemini (complex question).
@@ -88,6 +91,7 @@ export function ScanCalculator() {
     setEngineDisagreement(false);
     setRecognitionSource(null);
     setSolvedByGemini(false);
+    setGeminiVerified(false);
   };
 
   // Guard against oversized uploads (the accept attribute is only a UI hint).
@@ -433,7 +437,19 @@ export function ScanCalculator() {
       if (geminiEnabled) {
         try {
           const hint = localBest?.rawText?.trim() ? localBest.rawText.trim() : null;
-          const gemini = await recognizeWithGemini(capturedImage, hint);
+          // The preprocessed crop (grayscale, contrast-normalized, deskewed,
+          // cropped to the ink) travels along as a second image: through
+          // camera glare, shadows and colour noise it is often the sharper
+          // read, and the payload alone is a weak, frequently wrong hint.
+          let enhanced: string | null = null;
+          try {
+            const preUrl = preprocessedCanvas.toDataURL('image/png');
+            enhanced = preUrl.startsWith('data:image') ? preUrl : null;
+          } catch {
+            enhanced = null;
+          }
+          const gemini = await recognizeWithGemini(capturedImage, hint, enhanced);
+          setGeminiVerified(gemini.verified);
           if (gemini.expression) {
             // Spacing is presentation: compare compacted readings so a
             // harmless space difference cannot hide a real correction.
@@ -603,10 +619,12 @@ export function ScanCalculator() {
     setRecognitionSource(null);
     setEngineDisagreement(false);
     setSolvedByGemini(false);
+    setGeminiVerified(false);
     setGeminiMessage(null);
     setRecognitionSource(null);
     setEngineDisagreement(false);
     setSolvedByGemini(false);
+    setGeminiVerified(false);
     setHasScanned(false);
   };
 
@@ -670,6 +688,7 @@ export function ScanCalculator() {
     setRecognitionSource(null);
     setEngineDisagreement(false);
     setSolvedByGemini(false);
+    setGeminiVerified(false);
     setHasScanned(false);
   };
 
@@ -864,6 +883,11 @@ export function ScanCalculator() {
                 <p role="status" className="mt-1 sm:mt-2 text-xs sm:text-sm text-amber-600 dark:text-amber-400" data-testid="recognition-source">
                   ⚠️ Gemini and the local OCR engine read this differently — please verify the
                   expression above before solving.
+                </p>
+              )}
+              {recognitionSource === 'gemini' && !geminiVerified && (
+                <p role="status" className="mt-1 sm:mt-2 text-xs sm:text-sm text-amber-600 dark:text-amber-400" data-testid="gemini-verified">
+                  ⚠️ Reading not independently verified — check each digit before solving.
                 </p>
               )}
               {geminiEnabled === true && recognitionSource !== 'gemini' && recognitionSource !== null && (

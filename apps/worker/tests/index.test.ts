@@ -74,7 +74,113 @@ describe('POST /api/scan/recognize', () => {
       hint: '144+12 (misread)',
     });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ expression: '144/12', source: 'gemini', unreadable: false });
+    expect(await response.json()).toEqual({
+      expression: '144/12',
+      source: 'gemini',
+      unreadable: false,
+      verified: true,
+    });
+  });
+
+  it('accepts an optional enhanced crop and sends both images in one request', async () => {
+    const seen: { parts?: Array<Record<string, unknown>> }[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      seen.push(JSON.parse(String((init as RequestInit | undefined)?.body)));
+      return geminiJson('12+3');
+    }));
+    const response = await post('/api/scan/recognize', {
+      image: IMAGE,
+      mime: 'image/png',
+      hint: '12+3',
+      enhanced: IMAGE,
+    });
+    expect(response.status).toBe(200);
+    const recognizePayload = seen[0] as { contents?: Array<{ parts?: Array<Record<string, unknown>> }> };
+    const parts = recognizePayload.contents?.[0]?.parts ?? [];
+    expect(parts).toHaveLength(3);
+    expect(parts[0]).toHaveProperty('inline_data');
+    expect(parts[1]).toEqual({
+      inline_data: { mime_type: 'image/png', data: IMAGE },
+    });
+    expect(String((parts[2] as { text: string }).text)).toContain('12+3');
+  });
+
+  it('verify pass corrects a merged-digits hallucination from pass 1', async () => {
+    // Pass 1 collapses "99+99÷9" into a digit run; pass 2 re-reads the ink.
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        call += 1;
+        return geminiJson(call === 1 ? '954095' : '99+99/9');
+      })
+    );
+    const response = await post('/api/scan/recognize', {
+      image: IMAGE,
+      mime: 'image/png',
+      hint: '99+99÷9',
+    });
+    expect(await response.json()).toEqual({
+      expression: '99+99/9',
+      source: 'gemini',
+      unreadable: false,
+      verified: true,
+    });
+  });
+
+  it('keeps pass 1 but flags it unverified when pass 2 says UNREADABLE', async () => {
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        call += 1;
+        return geminiJson(call === 1 ? '12+3' : 'UNREADABLE');
+      })
+    );
+    const response = await post('/api/scan/recognize', { image: IMAGE, mime: 'image/png', hint: null });
+    expect(await response.json()).toEqual({
+      expression: '12+3',
+      source: 'gemini',
+      unreadable: false,
+      verified: false,
+    });
+  });
+
+  it('drops an operator-less result when pass 2 is unreachable and the payload has operators', async () => {
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        call += 1;
+        if (call === 1) return geminiJson('954095');
+        throw new TypeError('network down');
+      })
+    );
+    const response = await post('/api/scan/recognize', {
+      image: IMAGE,
+      mime: 'image/png',
+      hint: '99+99÷9',
+    });
+    expect(await response.json()).toEqual({ expression: '', source: 'gemini', unreadable: true });
+  });
+
+  it('returns pass 1 unverified when pass 2 is unreachable on a benign read', async () => {
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        call += 1;
+        if (call === 1) return geminiJson('12+3');
+        throw new TypeError('network down');
+      })
+    );
+    const response = await post('/api/scan/recognize', { image: IMAGE, mime: 'image/png', hint: '12+3' });
+    expect(await response.json()).toEqual({
+      expression: '12+3',
+      source: 'gemini',
+      unreadable: false,
+      verified: false,
+    });
   });
 
   it('rejects foreign origins before touching the model', async () => {

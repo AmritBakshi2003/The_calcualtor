@@ -22,7 +22,10 @@ export const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta
 export const DEFAULT_MODEL_ID = 'gemini-3.8-flash';
 
 /** Thinking-capable models need headroom beyond the visible answer. */
-export const MAX_OUTPUT_TOKENS = 1024;
+export const MAX_OUTPUT_TOKENS = 8192;
+
+/** Tried ONLY when the default model id has rotted away (404). */
+export const FALLBACK_MODEL_ID = 'gemini-3.5-flash-lite';
 
 export type GeminiErrorCode =
   | 'gemini_not_configured'
@@ -34,11 +37,17 @@ export type GeminiErrorCode =
 export class GeminiApiError extends Error {
   readonly code: GeminiErrorCode;
   readonly status: number;
+  /** Technical-safe diagnostic: the upstream request's failure description. */
+  readonly detail: string;
+  /** Numeric Gemini upstream HTTP status, when one was received. Diagnostic only. */
+  readonly upstreamStatus?: number;
 
-  constructor(code: GeminiErrorCode, status: number, detail: string) {
+  constructor(code: GeminiErrorCode, status: number, detail: string, upstreamStatus?: number) {
     super(detail);
     this.code = code;
     this.status = status;
+    this.detail = detail;
+    this.upstreamStatus = upstreamStatus;
   }
 }
 
@@ -91,7 +100,7 @@ export function observedUsage(body: object): GeminiUsage {
   return observed;
 }
 
-interface GenerationOutcome {
+interface GeminiOutcome {
   httpStatus?: number;
   isError: boolean;
   usage: GeminiUsage;
@@ -110,7 +119,7 @@ async function emitGeneration(
   model: string,
   telemetry: GeminiTelemetry | undefined,
   startedAt: number,
-  outcome: GenerationOutcome
+  outcome: GeminiOutcome
 ): Promise<void> {
   if (!telemetry) return;
   const config = readPostHogConfig(env);
@@ -142,6 +151,8 @@ async function emitGeneration(
 
 interface GeminiTextPart {
   text?: string;
+  /** Thinking models mark their internal reasoning parts with this flag. */
+  thought?: boolean;
 }
 
 interface GeminiCandidate {
@@ -162,29 +173,28 @@ interface GeminiRequestPayload {
 export function extractGeminiText(body: object): string {
   const candidates = (body as GeminiResponseBody).candidates ?? [];
   const parts = candidates[0]?.content?.parts ?? [];
+  // Thinking models return their internal reasoning as thought parts; those
+  // are NOT the answer — joining them would let raw reasoning text leak into
+  // a recognition/solve result.
   return parts
-    .map((part) => (typeof part.text === 'string' ? part.text : ''))
+    .map((part) => (typeof part.text === 'string' && part.thought !== true ? part.text : ''))
     .join('')
     .trim();
 }
 
 /** Call the model with one request payload and return the visible text. */
-export async function generateContent(
+async function callGeminiOnce(
   env: GeminiEnv,
+  apiKey: string,
+  model: string,
   payload: GeminiRequestPayload,
-  options: { fetchImpl?: FetchLike; timeoutMs?: number; telemetry?: GeminiTelemetry } = {}
+  options: { fetchImpl?: FetchLike; timeoutMs?: number; telemetry?: GeminiTelemetry }
 ): Promise<string> {
-  const apiKey = env.GEMINI_API_KEY?.trim();
-  if (!apiKey) {
-    throw new GeminiApiError('gemini_not_configured', 503, 'GEMINI_API_KEY is not set.');
-  }
-
-  const model = environmentModel(env);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000);
   // Latency covers the whole call: request, response and body parsing.
   const startedAt = monotonicNow();
-  const outcome: GenerationOutcome = { isError: false, usage: {} };
+  const outcome: GeminiOutcome = { isError: false, usage: {} };
 
   try {
     const response = await (options.fetchImpl ?? fetch)(
@@ -205,22 +215,33 @@ export async function generateContent(
     );
 
     if (response.status === 429) {
-      throw new GeminiApiError('rate_limited', 429, 'Gemini rate limit reached.');
+      throw new GeminiApiError('rate_limited', 429, 'Gemini rate limit reached.', 429);
     }
     if (response.status === 401 || response.status === 403) {
-      throw new GeminiApiError('gemini_error', 502, 'Gemini rejected the API key.');
+      throw new GeminiApiError('gemini_error', 502, 'Gemini rejected the API key.', response.status);
     }
     if (response.status === 404) {
-      throw new GeminiApiError('gemini_error', 502, `Gemini model ${model} is not available.`);
+      throw new GeminiApiError(
+        'gemini_error',
+        502,
+        `Gemini model ${model} is not available.`,
+        404
+      );
     }
     if (!response.ok) {
-      throw new GeminiApiError('gemini_error', 502, `Gemini request failed (${response.status}).`);
+      throw new GeminiApiError(
+        'gemini_error',
+        502,
+        `Gemini request failed (${response.status}).`,
+        response.status
+      );
     }
 
     const body = (await response.json()) as object;
     const text = extractGeminiText(body);
     if (!text) {
-      // Models with thinking budgets can return a visible-empty body.
+      // Thinking models can spend the whole budget reasoning and return a
+      // visible-empty body.
       throw new GeminiApiError('empty_response', 502, 'Gemini returned no visible text.');
     }
     outcome.httpStatus = response.status;
@@ -233,10 +254,53 @@ export async function generateContent(
         : // AbortController timeout or transport-level network failure.
           new GeminiApiError('timeout', 504, 'Gemini request timed out.');
     outcome.isError = true;
-    outcome.httpStatus = normalized.status;
+    outcome.httpStatus = normalized.upstreamStatus;
     throw normalized;
   } finally {
     clearTimeout(timer);
     await emitGeneration(env, model, options.telemetry, startedAt, outcome);
+  }
+}
+
+export async function generateContent(
+  env: GeminiEnv,
+  payload: GeminiRequestPayload,
+  options: { fetchImpl?: FetchLike; timeoutMs?: number; telemetry?: GeminiTelemetry } = {}
+): Promise<string> {
+  const apiKey = env.GEMINI_API_KEY?.trim();
+  if (!apiKey) {
+    throw new GeminiApiError('gemini_not_configured', 503, 'GEMINI_API_KEY is not set.');
+  }
+
+  const userModel = env.GEMINI_MODEL?.trim();
+  let model = userModel || DEFAULT_MODEL_ID;
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await callGeminiOnce(env, apiKey, model, payload, options);
+    } catch (error) {
+      const geminiError =
+        error instanceof GeminiApiError
+          ? error
+          : new GeminiApiError('timeout', 504, 'Gemini request timed out.');
+
+      // One recovery attempt, in two controlled shapes:
+      //  - the default model id rotted away (404) → try the fallback model,
+      //    but never second-guess a model the operator pinned;
+      //  - a transient Google-side failure (5xx) or a visible-empty thinking
+      //    response → the same request once more.
+      if (attempt === 0 && !userModel && geminiError.upstreamStatus === 404) {
+        model = FALLBACK_MODEL_ID;
+        continue;
+      }
+      if (
+        attempt === 0 &&
+        ((geminiError.upstreamStatus !== undefined && geminiError.upstreamStatus >= 500) ||
+          geminiError.code === 'empty_response')
+      ) {
+        continue;
+      }
+      throw geminiError;
+    }
   }
 }

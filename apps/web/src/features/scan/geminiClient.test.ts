@@ -66,7 +66,31 @@ describe('recognizeWithGemini', () => {
     });
     vi.stubGlobal('fetch', spy as unknown as typeof fetch);
     const result = await recognizeWithGemini(PNG_1PX, '12+34');
-    expect(result).toEqual({ expression: '12+34', unreadable: false });
+    expect(result).toEqual({ expression: '12+34', unreadable: false, verified: false });
+  });
+
+  it('posts the enhanced crop when provided and reads the verified flag', async () => {
+    const spy = vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.enhanced).toBe('ENHANCEDPAYLOAD');
+      expect(body.hint).toBe(null);
+      return jsonResponse(200, { expression: '189+82', unreadable: false, verified: true });
+    });
+    vi.stubGlobal('fetch', spy as unknown as typeof fetch);
+    const enhanced = 'data:image/png;base64,ENHANCEDPAYLOAD';
+    const result = await recognizeWithGemini(PNG_1PX, null, enhanced);
+    expect(result).toEqual({ expression: '189+82', unreadable: false, verified: true });
+  });
+
+  it('keeps working when a bad enhanced data URL is passed', async () => {
+    const spy = vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.enhanced).toBe(null);
+      return jsonResponse(200, { expression: '189+82', unreadable: false, verified: false });
+    });
+    vi.stubGlobal('fetch', spy as unknown as typeof fetch);
+    const result = await recognizeWithGemini(PNG_1PX, null, 'not-a-data-url');
+    expect(result).toEqual({ expression: '189+82', unreadable: false, verified: false });
   });
 
   it('maps server unavailability onto typed errors', async () => {

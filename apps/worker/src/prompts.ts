@@ -11,29 +11,71 @@
 
 export const FALLBACK_MARKER_FLAG = '[Blank/Unreadable Text]';
 
-export const RECOGNIZE_SYSTEM_INSTRUCTION = `You are a specialized mathematical text VALIDATION agent. A local OCR engine (Tesseract) has already read a line of handwritten or printed mathematics from an image, and its raw output is attached below as the TESSERACT PAYLOAD. You receive BOTH the original image and that payload in this message.
+export const RECOGNIZE_SYSTEM_INSTRUCTION = `You are a specialized handwriting-and-math RECOGNITION agent.
 
-TASK — cross-examine the text artifact against the original spatial image and correct recognition errors:
-+ Task 1: compare every glyph in the OCR text with the real ink shapes in the image. The OCR payload is a hint, never the source of truth.
-+ Task 2: correct classic misreads — a plus sign misread as 't' or 'f' is '+', a division slash misread as '7' is '/', a division sign misread as '+' or '=' is '/', a handwritten zero misread as the letter 'O' is '0', a five misread as 'S' is '5', a one misread as 'l' or 'I' is '1', an 'x'-like mark between numbers is multiplication '*'.
-+ Task 3: when the payload is the fallback flag "${FALLBACK_MARKER_FLAG}", the local OCR engine read nothing — rely entirely on your own reading of the image.
-+ Task 4: read the ONE arithmetic expression the image is about (calculator screens show one line; receipts show the line that IS an expression). Output exactly ONE normalized arithmetic expression using only the characters 0-9 + - * / . ( ). Convert '×' or 'x' to '*', '÷' to '/', '−' or '–' to '-'. Evaluate nothing: printing the result of the expression is FORBIDDEN.
-+ Task 5: when the image contains no readable arithmetic line at all, answer with the single word UNREADABLE.
+WHAT YOU RECEIVE IN THIS MESSAGE, IN ORDER:
+1. IMAGE 1: the original photo. This is ALWAYS the source of truth for what ink exists.
+2. IMAGE 2 (only in some requests): a grayscale, contrast-enhanced crop of the SAME line, prepared for OCR. It may be sharper than the original; when the two images disagree, trust the ink that IMAGE 1 shows.
+3. TEXT: the TESSERACT PAYLOAD — a raw reading by a weak local OCR engine. It exists only as a hint. Its digits and letters are frequently wrong, and it is completely unreliable for handwriting.
+
+TASK — read the ONE arithmetic expression the image is about, using your own eyes:
++ Step 1: leave the payload aside. First read the image LEFT TO RIGHT, listing each separate glyph group you see: every pencilled/printed digit cluster and every operator stroke between them. Spacing is the key to structure — a visible gap means a new group.
++ Step 2: never merge two glyph groups into one number unless their strokes physically touch AND no operator-like ink sits between them. "99 + 99" is two groups + an operator, never "9999".
++ Step 3: compare with the payload afterwards, not before. Keep payload content only when the image confirms it; silently discard payload characters (spaces, letters, stray digits) the image does not show.
++ Step 4: correct classic handwriting confusions to the character whose ink shape is present:  a single vertical stroke is '1' (for a handwritten 7 look for the top bar); two crossing strokes (one horizontal, one vertical) form '+' — '+' misread as the letter t, f, or the digit 7 is '+'; a lone horizontal stroke is '-'; a diagonal stroke or a pair of dots around a horizontal bar is division ('/' or '÷' → '/'); two crossing diagonals between operands are multiplication ('x', '×', 'X' → '*'); a handwritten 0 may look like the letter O, and an S may be a 5; 'l', 'I', 'I' (pipe) between digits are '1'; a curly '9' with a long tail is still 9; 'g' or 'q' may be a 9; 'b' may be a 6.
++ Step 5: if the whole crop shows a single number only, output that bare number — an operator is not invented when none exists.
++ Step 6: the payload is the fallback flag "${FALLBACK_MARKER_FLAG}" (or nonsense tied to background shapes) when local OCR read nothing readable — then rely entirely on your own reading.
++ Step 7: convert to normalized characters: '×' or 'x' between operands becomes '*', '÷' becomes '/', '−' or '–' becomes '-'. An '=' is NOT an allowed character: if the image contains '=', output only the arithmetic expression itself and drop the '=' and anything that follows it.
++ Step 8: evaluate nothing. Printing the result of the expression is FORBIDDEN.
++ Step 9: the image is ONE line of arithmetic (a calculator screen or a handwritten sum). If the photo contains several lines (a receipt, a page), read ONLY the line that IS the arithmetic expression the camera is aimed at.
+
+SAFETY LIMITS:
+* The output must never contain more character groups than the number of glyph groups visible in the image, and never fewer than one.
+* Digits that appear in a digit group must match the image: two/three digit numbers in the image stay the same length in the output.
+* When the image contains no readable arithmetic line at all (blank, noise, unrelated objects, unreadable scribble), answer with the single word UNREADABLE.
 
 OUTPUT CONTRACT — absolute and non-negotiable:
-* Output ONLY the raw mathematical string expression.
-* No Markdown, no code blocks or backticks, no quotes.
+* Output ONLY the raw mathematical string expression, using ONLY characters 0-9 + - * / . ( ).
+* No spaces, no Markdown, no code blocks or backticks, no quotes.
 * No conversational explanation, no prefix like 'The expression is', no suffix like '= result'.
 * No trailing whitespace or newline decoration.`;
+
+export const VERIFY_SYSTEM_INSTRUCTION = `You are a handwriting VERIFICATION agent. You receive:
+1. IMAGE 1: the original photo of one handwritten or printed arithmetic line (the source of truth).
+2. IMAGE 2 when present: a grayscale, contrast-enhanced crop of the SAME line.
+3. TEXT: a CANDIDATE expression somebody read from the image. The candidate may contain errors.
+
+TASK — verify the candidate against the ink, glyph by glyph, and answer with the truth:
++ Compare, left to right, EVERY separate glyph group in the image against the candidate. Structurally: two/three-digit numbers in the image must appear in the candidate with the same number of digit groups and in the same order.
++ The classic merge error: "99+99" was collapsed to "9999", and an operator (÷ especially) was dropped. If the image shows more digit groups than the candidate contains operand groups, the candidate is WRONG even when all its digits appear somewhere in it — fix it.
++ Operator check: for each gap between digit groups in the image, an operator stroke must exist in the candidate (+ - * /). A '+' may look like t/f/vertical-cross, a '-' may be faint, a '/' may carry dots ('÷').
++ Digit check: a handwritten 9 may mirror a 4, an 8 an S/B, a 7 a 1, a 0 an O. Decide by the ink shape in the image, never by plausibility of the candidate.
++ When the candidate is right apart from spacing, answer it back unchanged.
++ When the candidate is wrong, answer with the corrected expression — ONLY characters 0-9 + - * / . ( ), no spaces, no evaluation, no '= result'.
++ When the image contains no readable arithmetic line at all, answer with the single word UNREADABLE.
+
+OUTPUT CONTRACT — absolute and non-negotiable:
+* Output ONLY the expression string (or the single word UNREADABLE).
+* No explanation, no Markdown, no quotes, no decoration.`;
 
 export function buildRecognitionUserPayload(hint: string | null): string {
   const payload = hint && hint.trim().length > 0 ? hint.trim() : FALLBACK_MARKER_FLAG;
   return (
-    `RAW TESSERACT OUTPUT (payload; may be the fallback flag " ${FALLBACK_MARKER_FLAG}" ` +
-    `when local OCR read nothing):\n` +
+    `RAW TESSERACT OUTPUT (payload; a weak hint that is frequently WRONG for handwriting, ` +
+    `and " ${FALLBACK_MARKER_FLAG}" when local OCR read nothing):\n` +
     `${payload}\n\n` +
-    'Validate this payload against the image and output the corrected raw ' +
-    'mathematical expression only.'
+    'Read the image(s) first, then cross-check this payload against what you see, ' +
+    'and output the corrected raw mathematical expression only — never the payload ' +
+    'itself unless the image confirms every one of its characters.'
+  );
+}
+
+export function buildVerifyUserPayload(candidate: string): string {
+  return (
+    `CANDIDATE (possibly wrong) expression read from this image:\n` +
+    `${candidate}\n\n` +
+    'Verify it glyph by glyph against the image ink and answer with the corrected ' +
+    'expression only — or UNREADABLE when the image truly has no readable arithmetic line.'
   );
 }
 

@@ -18,6 +18,8 @@ export interface GeminiRecognition {
   /** '' when the model reports the image unreadable. */
   expression: string;
   unreadable: boolean;
+  /** True only when a second server-side pass confirmed the reading against the ink. */
+  verified: boolean;
 }
 
 export class GeminiUnavailableError extends Error {
@@ -165,10 +167,24 @@ export async function fetchGeminiCapabilities(): Promise<ScanCapabilities> {
 }
 
 /** Cross-validate the local OCR reading with the Gemini vision layer. */
-export async function recognizeWithGemini(dataUrl: string, hint: string | null): Promise<GeminiRecognition> {
+export async function recognizeWithGemini(
+  dataUrl: string,
+  hint: string | null,
+  enhancedDataUrl?: string | null
+): Promise<GeminiRecognition> {
   const prepared = await downscaleImageDataUrl(dataUrl);
   const { image, mime } = splitDataUrl(prepared);
-  const response = await postJson('/api/scan/recognize', { image, mime, hint });
+  // The enhanced crop (grayscale, contrast-normalized) travels as a second
+  // image when the caller prepared one; the server treats it as optional.
+  let enhanced: string | null = null;
+  if (enhancedDataUrl) {
+    try {
+      enhanced = splitDataUrl(await downscaleImageDataUrl(enhancedDataUrl)).image;
+    } catch {
+      enhanced = null; // a bad crop must not block the primary path
+    }
+  }
+  const response = await postJson('/api/scan/recognize', { image, mime, hint, enhanced });
   const payload = (await requireApiOk(response, 'Gemini recognition')) as Record<string, unknown>;
 
   const expression = typeof payload.expression === 'string' ? payload.expression : '';
@@ -176,7 +192,7 @@ export async function recognizeWithGemini(dataUrl: string, hint: string | null):
   if (!expression && !unreadable) {
     throw new GeminiUnavailableError('bad_response', response.status, 'Gemini returned no expression.');
   }
-  return { expression, unreadable };
+  return { expression, unreadable, verified: payload.verified === true };
 }
 
 /** Solve a question the local engines declined; null answer = undecidable. */

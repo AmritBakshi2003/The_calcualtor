@@ -24,6 +24,8 @@
     "test:api": "cd apps/api && npm run test:run",
     "test:worker": "cd apps/worker && npm run test:run",
     "test:e2e": "playwright test",
+    "test:scan": "node scripts/scan-accuracy.mjs",
+    "test:deploy-check": "node scripts/check-deploy.mjs",
     "install:e2e": "npx playwright install --with-deps",
     "lint": "npm run lint:web && npm run lint:api && npm run lint:worker",
     "lint:web": "cd apps/web && npm run lint",

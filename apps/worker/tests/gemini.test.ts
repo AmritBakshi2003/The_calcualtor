@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { extractGeminiText, generateContent, GeminiApiError } from '../src/gemini';
 import type { FetchLike } from '../src/env';
 
@@ -12,6 +12,24 @@ function GeminiResponse(pairs: Array<{ text?: string }>, status = 200) {
 describe('extractGeminiText', () => {
   it('joins multi-part text', () => {
     expect(extractGeminiText({ candidates: [{ content: { parts: [{ text: '12' }, { text: '+3' }] } }] })).toBe('12+3');
+  });
+
+  it('ignores thinking-model thought parts so reasoning never leaks into a result', () => {
+    expect(
+      extractGeminiText({
+        candidates: [
+          {
+            content: {
+              parts: [
+                { text: 'let me look at the ink...', thought: true },
+                { text: '189+82' },
+                { text: 'double-check 189... yes', thought: true },
+              ],
+            },
+          },
+        ],
+      })
+    ).toBe('189+82');
   });
 
   it('returns empty when there are no candidates', () => {
@@ -72,5 +90,77 @@ describe('generateContent', () => {
         },
       })
     ).rejects.toBeInstanceOf(GeminiApiError);
+  });
+
+  it('carries the upstream status on gemini_error so 502s diagnose themselves', async () => {
+    await expect(
+      generateContent(env, { parts: [], systemInstruction: 'x' }, {
+        fetchImpl: async () => new Response('bad key', { status: 401 }),
+      })
+    ).rejects.toMatchObject({ code: 'gemini_error', upstreamStatus: 401 });
+  });
+
+  it('retries a transient Google-side 500 once and recovers', async () => {
+    let calls = 0;
+    const fetchImpl: FetchLike = async () => {
+      calls += 1;
+      return calls === 1 ? new Response('boom', { status: 500 }) : GeminiResponse([{ text: '12+3' }]);
+    };
+    await expect(
+      generateContent(env, { parts: [], systemInstruction: 'x' }, { fetchImpl })
+    ).resolves.toBe('12+3');
+    expect(calls).toBe(2);
+  });
+
+  it('retries a visible-empty thinking response once and recovers', async () => {
+    let calls = 0;
+    const fetchImpl: FetchLike = async () => {
+      calls += 1;
+      return calls === 1 ? GeminiResponse([]) : GeminiResponse([{ text: '99+99/9' }]);
+    };
+    await expect(
+      generateContent(env, { parts: [], systemInstruction: 'x' }, { fetchImpl })
+    ).resolves.toBe('99+99/9');
+    expect(calls).toBe(2);
+  });
+
+  it('falls back to the secondary model when the primary 404s, then keeps failing publicly', async () => {
+    const urls: string[] = [];
+    const fetchImpl: FetchLike = async (url) => {
+      urls.push(String(url));
+      return new Response('not found', { status: 404 });
+    };
+    await expect(
+      generateContent(env, { parts: [], systemInstruction: 'x' }, { fetchImpl })
+    ).rejects.toMatchObject({ upstreamStatus: 404 });
+    expect(urls).toHaveLength(2);
+    expect(urls[1]).toContain('gemini-3.5-flash-lite');
+  });
+
+  it('does not override a user-pinned model on 404', async () => {
+    const urls: string[] = [];
+    const fetchImpl: FetchLike = async (url) => {
+      urls.push(String(url));
+      return new Response('not found', { status: 404 });
+    };
+    await expect(
+      generateContent({ GEMINI_API_KEY: 'k', GEMINI_MODEL: 'custom-model' }, { parts: [], systemInstruction: 'x' }, {
+        fetchImpl,
+      })
+    ).rejects.toBeInstanceOf(GeminiApiError);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain('custom-model');
+  });
+
+  it('never retries auth failures (a second bad-key call is pure waste)', async () => {
+    let calls = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      calls += 1;
+      return new Response('no', { status: 403 });
+    }));
+    await expect(
+      generateContent(env, { parts: [], systemInstruction: 'x' })
+    ).rejects.toMatchObject({ upstreamStatus: 403 });
+    expect(calls).toBe(1);
   });
 });

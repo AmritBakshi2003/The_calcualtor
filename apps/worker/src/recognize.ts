@@ -22,6 +22,12 @@ export interface RecognizeRequestBody {
   mime: AllowedImageMime;
   /** Tesseract's best reading, or null when the local engine found nothing. */
   hint: string | null;
+  /**
+   * Optional second image: the same line preprocessed in the browser
+   * (grayscale, contrast-normalized, cropped). Helps the model through glare,
+   * shadows and colour noise. Optional: older clients omit it.
+   */
+  enhanced?: string | null;
 }
 
 export interface RecognizeResult {
@@ -29,6 +35,27 @@ export interface RecognizeResult {
   expression: string;
   source: 'gemini';
   unreadable: boolean;
+  /** True only when a second model pass confirmed the expression against the ink. */
+  verified?: boolean;
+}
+
+/**
+ * Same validation as the primary image, minus the mandatory-field checks.
+ * Shared so the enhanced image can never slip through weaker rules.
+ */
+function parseOptionalBase64Image(value: unknown, label: string): string | null | undefined {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new ApiError(400, 'VALIDATION_ERROR', `${label} must be a base64 string or null.`);
+  }
+  const decoded = decodedBase64Length(value);
+  if (decoded === 0) {
+    throw new ApiError(400, 'INVALID_IMAGE', `${label} decoded to zero bytes.`);
+  }
+  if (decoded > MAX_IMAGE_BYTES) {
+    throw new ApiError(413, 'IMAGE_TOO_LARGE', `${label} exceeds the 5 MB limit.`);
+  }
+  return value;
 }
 
 /** Decoded byte length of a base64 string (no allocation, charset checked). */
@@ -76,7 +103,12 @@ export function parseRecognizeRequest(body: unknown): RecognizeRequestBody {
     hint = record.hint.slice(0, MAX_HINT_CHARS);
   }
 
-  return { image: record.image, mime: record.mime as AllowedImageMime, hint };
+  return {
+    image: record.image,
+    mime: record.mime as AllowedImageMime,
+    hint,
+    enhanced: parseOptionalBase64Image(record.enhanced, 'enhanced'),
+  };
 }
 
 /**
@@ -106,6 +138,20 @@ export function structuralMatch(text: string): string {
   // when any operator survived, at least two operands' worth of digits.
   if (!/[0-9]/.test(compact)) return '';
   return compact;
+}
+
+/**
+ * Hard trust gate for the FINAL outcome, used when the verification pass is
+ * unavailable. Handwritten numbers merged into one long digit run ("99+99÷9"
+ * read as "954095") are the misread Tesseract and a rushed model both make;
+ * when the payload clearly contained operators but the final expression lost
+ * every one of them, the outcome is not trustworthy enough to compute with —
+ * better nothing than silently wrong.
+ */
+export function mergedDigitsSuspect(hint: string | null, expression: string): boolean {
+  if (!hint) return false;
+  const hintHasOperator = /[+\-*/×÷]/.test(hint.replace(/\s/g, ''));
+  return hintHasOperator && expression.length >= 4 && !/[+\-*/]/.test(expression);
 }
 
 export function buildRecognizeResult(modelText: string): RecognizeResult {
