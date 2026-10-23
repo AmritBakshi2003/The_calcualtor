@@ -2,18 +2,25 @@ import { useEffect, useRef } from 'react';
 import Tesseract from 'tesseract.js';
 
 /**
- * Parameters the worker is returned to after any one-off pass.
+ * Characters the primary OCR passes are constrained to.
  *
- * No `tessedit_char_whitelist` on purpose: with a whitelist active Tesseract
- * reports a confidence of 0 for every word (so the UI always claimed "low
- * confidence" and candidates could not be compared), and it forces unmatchable
- * glyphs onto the nearest allowed character ("144 ÷ 12" became "144+12").
- * Postprocessing narrows the text to arithmetic instead.
+ * With a whitelist active Tesseract reports a confidence of 0 for every word
+ * (a reporting quirk; the TEXT is noticeably more accurate) so callers treat
+ * confidence 0 as "unknown" and fall back to WHITELIST_CONFIDENCE_FALLBACK
+ * when scoring. One open pass per scan keeps an unbiased candidate in play: a
+ * whitelist forces unmatchable glyphs onto the nearest allowed character, so
+ * the open pass can still win when the real text has other glyphs.
+ */
+export const OCR_WHITELIST = '0123456789+-*/×÷().,=^%xX';
+
+/**
+ * Parameters the worker is returned to after any one-off pass.
  */
 export const OCR_DEFAULT_PARAMS = {
   tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
   // Without a DPI hint Tesseract guesses (and warns about) the resolution.
   user_defined_dpi: '300',
+  tessedit_char_whitelist: OCR_WHITELIST,
 };
 
 export function useOCRWorker() {

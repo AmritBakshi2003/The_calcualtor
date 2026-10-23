@@ -111,10 +111,13 @@ describe('ScanCalculator editing', () => {
   it('reloads the scanner engine and retries when the first attempt reads nothing', async () => {
     // A stuck engine (stale cached worker, half-downloaded language data)
     // returns junk without throwing: "150514" on the image, "." in the box.
+    // One scan now runs block -> open block -> fallback passes before any
+    // retry, so engine 1 must return garbage for all three.
     worker.recognize
       .mockResolvedValueOnce(ocrText('.')) // engine 1, block pass: garbage
+      .mockResolvedValueOnce(ocrText('.')) // engine 1, open block pass: garbage
       .mockResolvedValueOnce(ocrText('.')) // engine 1, fallback pass: garbage
-      .mockResolvedValueOnce(ocrText('150514')); // freshly created engine
+      .mockResolvedValue(ocrText('150514')); // freshly created engine
 
     const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
 
@@ -139,5 +142,42 @@ describe('ScanCalculator editing', () => {
     expect(last).toEqual({});
     // and the edit box is still there for manual entry
     expect(screen.getByLabelText(/recognized expression/i)).toBeTruthy();
+  });
+
+  it('asks for an operator instead of evaluating digits split by a space', async () => {
+    // OCR reads one number as two: "2 3" must not be silently multiplied
+    worker.recognize.mockResolvedValue(ocrText('2 3'));
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('2 3'));
+    fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
+
+    expect(await screen.findByText(/missing operator between numbers - edit the box/i)).toBeTruthy();
+    expect(screen.queryByText('6')).toBeNull();
+  });
+
+  it('still solves thousands separators after the split-number guard', async () => {
+    worker.recognize.mockResolvedValue(ocrText('1,000+5'));
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('1000+5'));
+    fireEvent.click(screen.getByRole('button', { name: /solve expression/i }));
+    expect(await screen.findByText('1005')).toBeTruthy();
+  });
+
+  it('trusts an accurate whitelist read at confidence 0 over a confident open read', async () => {
+    // With the whitelist active Tesseract reports confidence 0 even when it
+    // read the text right; the open pass may read garbage with high confidence
+    // ("2+3" -> "iy" at 90). The whitelist text must win and, because its
+    // confidence is a reporting quirk, no confidence must be displayed.
+    worker.recognize
+      .mockResolvedValueOnce(ocrText('2+3', 0)) // pass 1: block, whitelist on
+      .mockResolvedValue(ocrText('iy', 90)); // pass 2 onward: open
+
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('2+3'));
+    expect(screen.queryByText(/confidence:/i)).toBeNull();
+    expect(screen.queryByText(/character\(s\)/i)).toBeNull();
   });
 });

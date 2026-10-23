@@ -29,6 +29,8 @@ export interface BBox {
 export interface OcrSymbol {
   text: string;
   confidence: number;
+  /** Box in the image the recognition ran on, when Tesseract reports one. */
+  bbox?: BBox;
 }
 
 /** One line of OCR output, with geometry and confidence when available. */
@@ -41,13 +43,22 @@ export interface OcrSegment {
 
 export interface OcrCandidate {
   /** Where the text came from, kept for debugging and tests. */
-  source: 'block' | 'line' | 'crop' | 'fallback';
+  source: 'block' | 'line' | 'block-open' | 'line-open' | 'crop' | 'fallback';
   /** Text after cleanForEvaluation. */
   expression: string;
   confidence: number;
+  /** False when the pass's confidence is a reporting quirk (whitelist reads 0). */
+  confidenceKnown?: boolean;
   score: number;
   segment?: OcrSegment;
 }
+
+/**
+ * Confidence the scoring treats a whitelist pass as having. With a whitelist
+ * active Tesseract reports 0 for every word even when the text is right, so a
+ * 0 is replaced by this when ranking (but not displayed to the user).
+ */
+export const WHITELIST_CONFIDENCE_FALLBACK = 55;
 
 const DATE_LIKE = /^\s*\d{1,4}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,4}\s*$/;
 const CLOCK_LIKE = /^\s*\d{1,2}\s*[:.]\s*\d{2}\s*(?:[ap]m)?\s*$/i;
@@ -73,6 +84,18 @@ function compact(text: string): string {
   return text.replace(/\s+/g, '');
 }
 
+/**
+ * Drop words before testing date/clock shapes.
+ *
+ * The guards used to be anchored with ^...$, so ANY word on the line weakened
+ * them: "Order 12/03/2025" on a receipt looked like a digit line, beat the
+ * real expression, and even evaluated as a division. Numbers and operators
+ * must stay: stripping them would erase "12/03/2025" into just spaces.
+ */
+function stripWords(text: string): string {
+  return text.replace(/[A-Za-z]+/g, ' ');
+}
+
 /** Operators with an operand on both sides ("2+3", "(1+2)*3"), not "-5". */
 function countOperators(text: string): number {
   let count = 0;
@@ -88,7 +111,8 @@ function countOperators(text: string): number {
  * Used to choose between text lines before any cleaning happens.
  */
 export function textShapeScore(raw: string): number {
-  const text = compact(normalizeForScoring(raw));
+  // normalizeForScoring first ("2x3" -> "2*3"), then strip words away.
+  const text = compact(stripWords(normalizeForScoring(raw)));
   let score = Math.min(countDigits(text), 10) * 2;
   score += Math.min(countOperators(text), 3) * 14;
   if (text.includes('=')) score += 6;
@@ -122,7 +146,7 @@ export function expressionScore(expression: string, confidence: number, raw?: st
   }
   score += parses ? 20 : -40;
 
-  const scoredAs = compact(normalizeForScoring(raw ?? expression));
+  const scoredAs = compact(stripWords(normalizeForScoring(raw ?? expression)));
   if (DATE_LIKE.test(scoredAs) || CLOCK_LIKE.test(scoredAs)) score -= 45;
 
   return score;

@@ -201,6 +201,10 @@ export function cleanForEvaluation(text: string): string {
   // small glyph (often the dot of "=") sat next to an operator: "0.5*%8" -> "0.5*8".
   s = s.replace(/([+\-*/^(])\s*%/g, '$1').replace(/^%+/, '');
 
+  // "%" printed BETWEEN two numbers is a misread "×" (they look alike at low
+  // resolution): "12.5%4" would silently evaluate as modulo 0.5.
+  s = s.replace(/(\d)\s*%\s*(?=[\d(.])/g, '$1*');
+
   // Dangling operators / open parenthesis at the end, and operators that cannot start an expression
   s = s.replace(/[\s+\-*/^.(]+$/, '');
   s = s.replace(/^[\s*/^.%]+/, '');
