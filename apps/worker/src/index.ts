@@ -8,6 +8,7 @@
  * Routes:
  *   GET  /api/scan/capabilities  -> { gemini: boolean }
  *   POST /api/scan/recognize     -> image + Tesseract hint -> corrected expression
+ *   POST /api/scan/ocrspace      -> image -> OCR.space reading (soft-fail {available:false})
  *   POST /api/solve/complex      -> gated question -> numeric answer
  *   GET  /api/health             -> liveness probe
  *   everything else              -> static assets (env.ASSETS)
@@ -37,6 +38,7 @@ import {
   parseRecognizeRequest,
 } from './recognize';
 import { assertClientEvaluable, buildSolveResult, parseSolveRequest } from './solve';
+import { handleOcrSpace } from './ocrspace';
 
 /** Per-client flood guard: 60 Gemini calls per 10 minutes per IP. */
 const limiter = new RateLimiter(60, 10 * 60 * 1000);
@@ -174,6 +176,12 @@ export default {
           throw new ApiError(503, 'gemini_not_configured', 'Gemini is not configured.');
         }
         return await handleRecognize(request, env);
+      }
+      if (url.pathname === '/api/scan/ocrspace' && request.method === 'POST') {
+        // OCR.space is a soft engine: without a key, or on any failure, it
+        // answers { available: false, reason } with 200 so the pipeline
+        // continues (only invalid input propagates as 400/413).
+        return jsonResponse(200, await handleOcrSpace(request, env));
       }
       if (url.pathname === '/api/solve/complex' && request.method === 'POST') {
         if (!env.GEMINI_API_KEY?.trim()) {

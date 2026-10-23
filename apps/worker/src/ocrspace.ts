@@ -19,6 +19,7 @@
  * soft-fail envelope follow.
  */
 
+import { normalize } from '@calculator-suite/math-core';
 import type { FetchLike, WorkerEnv } from './env';
 import { ApiError, readJsonBody } from './http';
 import { ALLOWED_IMAGE_MIMES, decodedBase64Length, type AllowedImageMime } from './recognize';
@@ -283,5 +284,89 @@ export async function callOcrSpace(
     throw new OcrSpaceError('timeout', 'OCR.space request timed out.');
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** What the route answers. Failure is ALWAYS soft: HTTP 200, pipeline continues. */
+export type OcrSpaceOutcome =
+  | { available: true; expression: string; rawText: string; engine: 1 | 2 }
+  | { available: false; reason: string };
+
+/**
+ * OCR.space text is often multi-line (receipts, screenshots): normalize each
+ * line separately and keep the longest surviving expression (ties keep the
+ * first line's order), so junk lines cannot concatenate across a newline
+ * into a longer wrong number.
+ */
+export function pickOcrSpaceExpression(rawText: string): string {
+  let best = '';
+  for (const line of rawText.split(/\r?\n/)) {
+    const expression = normalize(line);
+    if (expression !== null && expression.length > best.length) best = expression;
+  }
+  return best;
+}
+
+/**
+ * Engine 2 first (the better model); when it reads NOTHING, retry once with
+ * engine 1. An empty final read is still `available: true` with an empty
+ * expression — the engine worked, there was just nothing to read.
+ */
+export async function recognizeWithOcrSpace(
+  apiKey: string,
+  image: OcrSpaceImage,
+  options: { fetchImpl?: FetchLike; timeoutMs?: number } = {}
+): Promise<OcrSpaceOutcome> {
+  let engine: 1 | 2 = 2;
+  let rawText = await callOcrSpace(apiKey, image, engine, options);
+  if (!rawText) {
+    engine = 1;
+    rawText = await callOcrSpace(apiKey, image, engine, options);
+  }
+  return {
+    available: true,
+    expression: pickOcrSpaceExpression(rawText),
+    rawText,
+    engine,
+  };
+}
+
+/** Soft-fail reason strings, one per OcrSpaceError code. */
+function reasonFor(error: OcrSpaceError): string {
+  switch (error.code) {
+    case 'timeout':
+      return 'timeout';
+    case 'upstream_error':
+      return 'ocrspace_unavailable';
+    case 'malformed_response':
+      return 'ocrspace_malformed_response';
+  }
+}
+
+/**
+ * The route handler: parse the image, run the engines, and turn EVERY
+ * OCR.space failure into `{ available: false, reason }` with HTTP 200 so the
+ * recognition pipeline continues with the other engines. Only input
+ * validation errors (ApiError 400/413) propagate to the router, matching
+ * every other route's behavior for malformed requests.
+ */
+export async function handleOcrSpace(
+  request: Request,
+  env: OcrSpaceEnv,
+  options: { fetchImpl?: FetchLike; timeoutMs?: number } = {}
+): Promise<OcrSpaceOutcome> {
+  const image = await parseOcrSpaceImage(request);
+  const apiKey = env.OCR_SPACE_API_KEY?.trim();
+  if (!apiKey) {
+    return { available: false, reason: 'not_configured' };
+  }
+  try {
+    return await recognizeWithOcrSpace(apiKey, image, options);
+  } catch (error) {
+    if (error instanceof OcrSpaceError) {
+      return { available: false, reason: reasonFor(error) };
+    }
+    // Unknown failure shape: stay soft, leak nothing (never the key).
+    return { available: false, reason: 'ocrspace_error' };
   }
 }
