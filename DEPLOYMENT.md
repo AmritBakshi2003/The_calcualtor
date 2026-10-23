@@ -40,6 +40,58 @@ This creates an optimized production build in `apps/web/dist` with:
 - Service worker for PWA functionality
 - Asset fingerprinting for caching
 
+## Cloudflare Workers (recommended — required for the Gemini scanner API)
+
+Production is a **Cloudflare Worker with static assets**, not a plain static site:
+`wrangler.jsonc` declares `main: ./apps/worker/src/index.ts` and serves `apps/web/dist`
+as assets with `run_worker_first: ["/api/*"]`, so the same-origin scanner API
+(`/api/scan/*`, `/api/solve/complex`) runs next to the static app. The Gemini API key
+lives only in the Worker environment — never in the browser bundle.
+
+### Deploy
+
+```bash
+npm ci
+npm run deploy:worker     # builds the web app, then wrangler deploy --config wrangler.jsonc
+```
+
+This is the ONLY correct way to deploy the server component. Do **not** replace
+`wrangler.jsonc` with a dashboard-generated config (`main: "worker.js"`, `assets
+directory: "./dist"`, or a `functions/` folder): those paths do not exist in this
+repository, and dashboard-managed assets cannot have `run_worker_first` applied —
+`/api/*` requests would be swallowed by the static asset router and the scanner API
+would 404.
+
+Other options:
+
+- **Cloudflare Git integration** (see README): pushes to `master` build and deploy
+  with the same `wrangler.jsonc`.
+- **GitHub Actions** (`.github/workflows/deploy.yml`): deploys on every `master` push
+  when `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` are valid repository secrets.
+  The workflow validates the token with `wrangler whoami` and skips (with a warning)
+  when the token is missing or revoked — an invalid token never fails the push red.
+
+### Scanner secrets and variables
+
+In the Worker dashboard (*Settings → Variables and Secrets*) or via
+`npx wrangler secret put GEMINI_API_KEY`:
+
+| Name | Type | Required | Purpose |
+|---|---|---|---|
+| `GEMINI_API_KEY` | encrypted secret | yes (for Gemini mode) | Google AI Studio key; without it `/api/scan/capabilities` reports `{"gemini":false}` and the scanner stays local-only |
+| `GEMINI_MODEL` | plain variable | no | overrides `gemini-3.8-flash` |
+
+### Verify after deploying
+
+```bash
+curl https://<your-worker-domain>/api/health            # -> {"ok":true}
+curl https://<your-worker-domain>/api/scan/capabilities # -> {"gemini":true} when the key is live
+```
+
+Both must return JSON. HTML means the `/api/*` routing is not active (see the warning
+above). With `gemini: true`, the Scan tab shows the "✨ Powered by Google Gemini"
+badge and recognition is cross-validated by Gemini.
+
 ## Static Hosting Deployment
 
 ### Vercel
@@ -149,10 +201,9 @@ caddy
 
 ## Environment Variables
 
-The application does not require any environment variables for basic operation. All features work client-side.
-
-Optional environment variables (for future enhancements):
-- None currently required
+The web app itself requires no environment variables for basic operation. The
+Cloudflare Worker serving the optional Gemini scanner API reads `GEMINI_API_KEY`
+(encrypted secret) and `GEMINI_MODEL` (optional) — see the Workers section above.
 
 ## PWA Installation
 

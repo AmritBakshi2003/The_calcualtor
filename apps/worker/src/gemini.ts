@@ -13,6 +13,8 @@
  */
 
 import type { FetchLike, WorkerEnv } from './env';
+import { AI_PROVIDER, captureAiGeneration, readPostHogConfig } from './posthog';
+import type { AiTrace, CaptureDelivery } from './posthog';
 
 export const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
@@ -40,9 +42,102 @@ export class GeminiApiError extends Error {
   }
 }
 
+/** Env slice the model call and its (optional) telemetry need. */
+export type GeminiEnv = Pick<
+  WorkerEnv,
+  'GEMINI_API_KEY' | 'GEMINI_MODEL' | 'POSTHOG_PROJECT_TOKEN' | 'POSTHOG_HOST'
+>;
+
+/** Trace identity for one feature invocation, plus its background delivery. */
+export interface GeminiTelemetry {
+  trace: AiTrace;
+  /** Hand the capture promise to the runtime lifecycle (ctx.waitUntil). */
+  deliver?: CaptureDelivery;
+}
+
 export function environmentModel(env: Pick<WorkerEnv, 'GEMINI_MODEL'>): string {
   const configured = env.GEMINI_MODEL?.trim();
   return configured ? configured : DEFAULT_MODEL_ID;
+}
+
+/** Monotonic clock: latency must not be affected by wall-clock jumps. */
+function monotonicNow(): number {
+  return performance.now();
+}
+
+interface GeminiUsageMetadata {
+  promptTokenCount?: unknown;
+  candidatesTokenCount?: unknown;
+}
+
+export interface GeminiUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+/** Observed token counts from the response; never estimated or invented. */
+export function observedUsage(body: object): GeminiUsage {
+  const usage = (body as { usageMetadata?: GeminiUsageMetadata }).usageMetadata;
+  const observed: GeminiUsage = {};
+  if (typeof usage?.promptTokenCount === 'number' && Number.isFinite(usage.promptTokenCount)) {
+    observed.inputTokens = usage.promptTokenCount;
+  }
+  if (
+    typeof usage?.candidatesTokenCount === 'number' &&
+    Number.isFinite(usage.candidatesTokenCount)
+  ) {
+    observed.outputTokens = usage.candidatesTokenCount;
+  }
+  return observed;
+}
+
+interface GenerationOutcome {
+  httpStatus?: number;
+  isError: boolean;
+  usage: GeminiUsage;
+}
+
+/**
+ * Emit exactly one metadata-only `$ai_generation` for this model call.
+ *
+ * The trace id comes from the caller (one per feature invocation); the span id
+ * is unique to this generation. Delivery happens through the Worker's
+ * background lifecycle when provided, so the HTTP response is not delayed.
+ * Failures here can never change the model result or error.
+ */
+async function emitGeneration(
+  env: GeminiEnv,
+  model: string,
+  telemetry: GeminiTelemetry | undefined,
+  startedAt: number,
+  outcome: GenerationOutcome
+): Promise<void> {
+  if (!telemetry) return;
+  const config = readPostHogConfig(env);
+  if (!config) return;
+
+  try {
+    const work = captureAiGeneration(config, {
+      traceId: telemetry.trace.traceId,
+      spanId: crypto.randomUUID(),
+      sessionId: telemetry.trace.sessionId,
+      distinctId: telemetry.trace.distinctId,
+      model,
+      provider: AI_PROVIDER,
+      latencySeconds: (monotonicNow() - startedAt) / 1000,
+      inputTokens: outcome.usage.inputTokens,
+      outputTokens: outcome.usage.outputTokens,
+      isError: outcome.isError || undefined,
+      httpStatus: outcome.httpStatus,
+    });
+    if (telemetry.deliver) {
+      telemetry.deliver(work);
+    } else {
+      await work;
+    }
+  } catch {
+    // Observability is strictly best-effort.
+  }
 }
 
 interface GeminiTextPart {
@@ -75,9 +170,9 @@ export function extractGeminiText(body: object): string {
 
 /** Call the model with one request payload and return the visible text. */
 export async function generateContent(
-  env: Pick<WorkerEnv, 'GEMINI_API_KEY' | 'GEMINI_MODEL'>,
+  env: GeminiEnv,
   payload: GeminiRequestPayload,
-  options: { fetchImpl?: FetchLike; timeoutMs?: number } = {}
+  options: { fetchImpl?: FetchLike; timeoutMs?: number; telemetry?: GeminiTelemetry } = {}
 ): Promise<string> {
   const apiKey = env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
@@ -87,6 +182,9 @@ export async function generateContent(
   const model = environmentModel(env);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000);
+  // Latency covers the whole call: request, response and body parsing.
+  const startedAt = monotonicNow();
+  const outcome: GenerationOutcome = { isError: false, usage: {} };
 
   try {
     const response = await (options.fetchImpl ?? fetch)(
@@ -125,12 +223,20 @@ export async function generateContent(
       // Models with thinking budgets can return a visible-empty body.
       throw new GeminiApiError('empty_response', 502, 'Gemini returned no visible text.');
     }
+    outcome.httpStatus = response.status;
+    outcome.usage = observedUsage(body);
     return text;
   } catch (error) {
-    if (error instanceof GeminiApiError) throw error;
-    // AbortController timeout or transport-level network failure.
-    throw new GeminiApiError('timeout', 504, 'Gemini request timed out.');
+    const normalized =
+      error instanceof GeminiApiError
+        ? error
+        : // AbortController timeout or transport-level network failure.
+          new GeminiApiError('timeout', 504, 'Gemini request timed out.');
+    outcome.isError = true;
+    outcome.httpStatus = normalized.status;
+    throw normalized;
   } finally {
     clearTimeout(timer);
+    await emitGeneration(env, model, options.telemetry, startedAt, outcome);
   }
 }

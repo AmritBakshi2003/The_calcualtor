@@ -17,6 +17,7 @@
     "build:web": "cd apps/web && npm run build",
     "build:api": "cd apps/api && npm run build",
     "build:worker": "wrangler deploy --dry-run --config wrangler.jsonc",
+    "deploy:worker": "npm run build:web && wrangler deploy --config wrangler.jsonc",
     "test": "npm run test:core && npm run test:unit && npm run test:api && npm run test:worker",
     "test:core": "cd packages/math-core && npm run test:run",
     "test:unit": "cd apps/web && npm run test",

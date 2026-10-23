@@ -6,6 +6,10 @@ export interface WorkerEnv {
   GEMINI_API_KEY?: string;
   /** Optional model override (defaults to a documented, current flash model). */
   GEMINI_MODEL?: string;
+  /** PostHog project capture token; absent ⇒ AI observability is a no-op. */
+  POSTHOG_PROJECT_TOKEN?: string;
+  /** PostHog ingestion host: https://us.i.posthog.com or https://eu.i.posthog.com. */
+  POSTHOG_HOST?: string;
   /** Static asset binding declared in wrangler.jsonc. */
   ASSETS?: Fetcher;
 }
