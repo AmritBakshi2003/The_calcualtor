@@ -40,10 +40,18 @@ import {
 } from './recognize';
 import { assertClientEvaluable, buildSolveResult, parseSolveRequest } from './solve';
 import { handleOcrSpace } from './ocrspace';
-import { handleConsensus } from './consensus';
+import { handleConsensusBody } from './consensus';
 
 /** Per-client flood guard: 60 Gemini calls per 10 minutes per IP. */
 const limiter = new RateLimiter(60, 10 * 60 * 1000);
+/** Scan flood guard (Phase 3, step 6): 10 scans per minute per IP. Exported for test resets. */
+export const scanLimiter = new RateLimiter(10, 60 * 1000);
+/** Hard body cap for POST bodies (4 MB covers a 3 MB base64 image + payload). */
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+/** Requests with a Content-Length above this are rejected before reading. */
+const MAX_BODY_BYTES_STRING = `${MAX_BODY_BYTES / (1024 * 1024)} MB`;
+
+const IMAGE_MIME_PATTERN = /^(?:data:)?image\/(?:png|jpeg|webp)(?:;base64,|$)/;
 
 function guard(request: Request, url: URL): void {
   if (!isSameOriginRequest(request, url)) {
@@ -52,6 +60,48 @@ function guard(request: Request, url: URL): void {
   if (!limiter.allow(clientIp(request))) {
     throw new ApiError(429, 'RATE_LIMIT_EXCEEDED', 'Too many requests; try again later.');
   }
+}
+
+/**
+ * Phase-3 protections for the scan routes, on top of guard():
+ *  - 10 scans/min per IP,
+ *  - 4 MB body cap (header pre-check + the body limit at read time),
+ *  - image content-type allowlist (png/jpeg/webp only) via the declared
+ *    data-URI prefix or the `mime` field — full base64 validation stays in
+ *    the per-route parsers.
+ */
+function guardScan(request: Request, url: URL): void {
+  guard(request, url);
+  if (!scanLimiter.allow(clientIp(request))) {
+    throw new ApiError(429, 'SCAN_RATE_LIMIT_EXCEEDED', 'Too many scans; try again in a minute.');
+  }
+  const declaredLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    throw new ApiError(413, 'BODY_TOO_LARGE', `Request body exceeds ${MAX_BODY_BYTES_STRING}.`);
+  }
+}
+
+/**
+ * Content-type allowlist for scan JSON bodies: the declared image mime (the
+ * data-URI prefix or the `mime` field) must be PNG/JPEG/WebP. The per-route
+ * parsers enforce the same allowlist with detailed 400s; this early check
+ * keeps non-image payloads out before any field-level validation.
+ */
+function assertScanImageMime(body: object): void {
+  const record = body as Record<string, unknown>;
+  const image = typeof record.image === 'string' ? record.image : '';
+  const mime = typeof record.mime === 'string' ? record.mime : '';
+  const declared = image.startsWith('data:') ? image : mime;
+  // Bare base64 without any declared mime is fine: the route parser
+  // defaults it to PNG. A DECLARED mime must be on the allowlist.
+  if (declared && !IMAGE_MIME_PATTERN.test(declared)) {
+    throw new ApiError(400, 'INVALID_IMAGE', 'image must be PNG, JPEG, or WebP.');
+  }
+}
+
+/** JSON body for scan routes (the 4 MB cap is pre-checked in guardScan). */
+async function readScanBody(request: Request, _url: URL): Promise<object> {
+  return readJsonBody(request);
 }
 
 interface RecognizeImages {
@@ -174,6 +224,7 @@ export default {
         return jsonResponse(200, { gemini: Boolean(env.GEMINI_API_KEY?.trim()) });
       }
       if (url.pathname === '/api/scan/recognize' && request.method === 'POST') {
+        guardScan(request, url);
         if (!env.GEMINI_API_KEY?.trim()) {
           throw new ApiError(503, 'gemini_not_configured', 'Gemini is not configured.');
         }
@@ -183,12 +234,16 @@ export default {
         // Phase-3 pipeline: SHA-256 image cache -> decide() -> (arbiter).
         // Only input validation throws; everything else degrades softly
         // inside the result (verified:false + stages).
-        return jsonResponse(200, await handleConsensus(request, env));
+        const body = await readScanBody(request, url);
+        assertScanImageMime(body);
+        return jsonResponse(200, await handleConsensusBody(body, env));
       }
       if (url.pathname === '/api/scan/ocrspace' && request.method === 'POST') {
         // OCR.space is a soft engine: without a key, or on any failure, it
         // answers { available: false, reason } with 200 so the pipeline
-        // continues (only invalid input propagates as 400/413).
+        // continues (only invalid input propagates as 400/413). It accepts
+        // JSON and multipart bodies, so it parses the body itself.
+        guardScan(request, url);
         return jsonResponse(200, await handleOcrSpace(request, env));
       }
       if (url.pathname === '/api/solve/complex' && request.method === 'POST') {

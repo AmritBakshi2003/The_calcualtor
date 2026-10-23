@@ -282,8 +282,20 @@ export async function handleConsensus(
   env: WorkerEnv,
   options: { fetchImpl?: FetchLike } = {}
 ): Promise<ConsensusResult> {
-  const body = parseConsensusRequest(await readJsonBody(request));
-  const imageBytes = base64ToBytes(body.image.base64);
+  return handleConsensusBody(await readJsonBody(request), env, options);
+}
+
+/**
+ * The pipeline from an already-read JSON body (the route enforces the scan
+ * guards — rate limit, body cap, mime allowlist — before parsing).
+ */
+export async function handleConsensusBody(
+  body: object,
+  env: WorkerEnv,
+  options: { fetchImpl?: FetchLike } = {}
+): Promise<ConsensusResult> {
+  const parsed = parseConsensusRequest(body);
+  const imageBytes = base64ToBytes(parsed.image.base64);
   const key = await cacheKeyFor(imageBytes);
   const kv = env.SCAN_CACHE;
 
@@ -298,7 +310,7 @@ export async function handleConsensus(
     return { ...cached, stages: [...(cached.stages ?? []), 'cache:hit'] };
   }
 
-  const decision = decide(body.candidates);
+  const decision = decide(parsed.candidates);
   const stages: string[] = [`decide:${decision.outcome}`];
 
   const result: ConsensusResult =
@@ -310,7 +322,7 @@ export async function handleConsensus(
           alternatives: decision.alternatives,
           stages: [...stages],
         }
-      : await arbitrate(env, decision, body.image, imageBytes, stages, options);
+      : await arbitrate(env, decision, parsed.image, imageBytes, stages, options);
 
   // Cache the pipeline result WITHOUT the per-response cache marker, so a
   // hit can append its own 'cache:hit' cleanly.

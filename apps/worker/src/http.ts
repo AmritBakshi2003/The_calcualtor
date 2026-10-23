@@ -84,6 +84,11 @@ export class RateLimiter {
     }
     return true;
   }
+
+  /** Clear all state (tests, admin resets). */
+  reset(): void {
+    this.hits.clear();
+  }
 }
 
 export function clientIp(request: Request): string {

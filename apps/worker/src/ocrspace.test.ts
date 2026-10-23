@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import worker from './index';
+import worker, { scanLimiter } from './index';
 import type { WorkerEnv } from './env';
 import { bytesToBase64, extractOcrSpaceText, parseOcrSpaceImage } from './ocrspace';
 
@@ -35,6 +35,7 @@ function makeFetchMock() {
 
 beforeEach(() => {
   vi.stubGlobal('fetch', makeFetchMock());
+  scanLimiter.reset(); // 10 scans/min per IP would trip across tests
 });
 
 afterEach(() => {

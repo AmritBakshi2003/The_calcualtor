@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import worker from '../src/index';
+import worker, { scanLimiter } from '../src/index';
 import type { WorkerEnv } from '../src/env';
 
 const envNoKey = {} as WorkerEnv;
@@ -15,6 +15,7 @@ function geminiJson(text: string): Response {
 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => geminiJson('144/12')));
+  scanLimiter.reset(); // 10 scans/min per IP would trip across tests
 });
 
 afterEach(() => {
