@@ -17,8 +17,8 @@
 
 import { normalize } from '@calculator-suite/math-core';
 import type { KVNamespace } from '@cloudflare/workers-types';
-import type { FetchLike } from './env';
-import { ApiError } from './http';
+import type { FetchLike, WorkerEnv } from './env';
+import { ApiError, readJsonBody } from './http';
 import { GeminiApiError, generateContent } from './gemini';
 import { parseImageField } from './ocrspace';
 import type { AllowedImageMime } from './recognize';
@@ -200,6 +200,122 @@ export function parseConsensusImage(
     throw new ApiError(400, 'VALIDATION_ERROR', 'image is required.');
   }
   return parseImageField(image, explicitMime, 'image', 3 * 1024 * 1024);
+}
+
+// ---------------------------------------------------------------------------
+// Step 5: the pipeline — parse, cache, decide, (arbiter), respond.
+// ---------------------------------------------------------------------------
+
+export const MAX_CANDIDATES = 24;
+const MAX_EXPRESSION_CHARS = 300;
+const MAX_SOURCE_CHARS = 64;
+
+export interface ConsensusRequestBody {
+  image: { base64: string; mime: AllowedImageMime };
+  candidates: ConsensusCandidate[];
+}
+
+/**
+ * Validate the consensus request: the enhanced image (base64/data URI,
+ * allowlisted mime) plus the candidate readings. Invalid input throws
+ * ApiError(400) — a client bug, not a soft pipeline failure.
+ */
+export function parseConsensusRequest(body: object): ConsensusRequestBody {
+  const record = body as Record<string, unknown>;
+  const image = parseConsensusImage(record.image, record.mime);
+
+  if (!Array.isArray(record.candidates)) {
+    throw new ApiError(400, 'VALIDATION_ERROR', 'candidates must be an array.');
+  }
+  if (record.candidates.length > MAX_CANDIDATES) {
+    throw new ApiError(400, 'VALIDATION_ERROR', `At most ${MAX_CANDIDATES} candidates are accepted.`);
+  }
+
+  const candidates: ConsensusCandidate[] = record.candidates.map((raw) => {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'Each candidate must be an object.');
+    }
+    const candidate = raw as Record<string, unknown>;
+    if (typeof candidate.expression !== 'string' || candidate.expression.length > MAX_EXPRESSION_CHARS) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'Each candidate needs a string expression (max 300 chars).');
+    }
+    if (
+      candidate.source !== undefined &&
+      (typeof candidate.source !== 'string' || candidate.source.length > MAX_SOURCE_CHARS)
+    ) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'Candidate source must be a short string.');
+    }
+    if (
+      candidate.confidence !== undefined &&
+      (typeof candidate.confidence !== 'number' || !Number.isFinite(candidate.confidence))
+    ) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'Candidate confidence must be a number.');
+    }
+    return {
+      expression: candidate.expression,
+      source:
+        typeof candidate.source === 'string' && candidate.source.trim()
+          ? candidate.source.trim()
+          : 'unknown',
+      confidence:
+        typeof candidate.confidence === 'number' && Number.isFinite(candidate.confidence)
+          ? candidate.confidence
+          : undefined,
+    };
+  });
+
+  return { image, candidates };
+}
+
+/**
+ * The consensus pipeline for one scan:
+ *  1. SHA-256 of the enhanced image -> KV cache; a hit skips EVERYTHING,
+ *  2. decide() over the candidate readings,
+ *  3. consensus answers directly (verified:true); needs_arbiter goes to the
+ *     Gemini arbiter with every protection rule from step 4.
+ *
+ * Only input validation throws (400/413, like every route); engine and
+ * quota failures degrade inside the result (verified:false + stages).
+ */
+export async function handleConsensus(
+  request: Request,
+  env: WorkerEnv,
+  options: { fetchImpl?: FetchLike } = {}
+): Promise<ConsensusResult> {
+  const body = parseConsensusRequest(await readJsonBody(request));
+  const imageBytes = base64ToBytes(body.image.base64);
+  const key = await cacheKeyFor(imageBytes);
+  const kv = env.SCAN_CACHE;
+
+  const hit = await cacheGet(kv, key);
+  if (
+    hit &&
+    typeof hit === 'object' &&
+    typeof (hit as ConsensusResult).expression === 'string' &&
+    typeof (hit as ConsensusResult).verified === 'boolean'
+  ) {
+    const cached = hit as ConsensusResult;
+    return { ...cached, stages: [...(cached.stages ?? []), 'cache:hit'] };
+  }
+
+  const decision = decide(body.candidates);
+  const stages: string[] = [`decide:${decision.outcome}`];
+
+  const result: ConsensusResult =
+    decision.outcome === 'consensus'
+      ? {
+          expression: decision.expression,
+          verified: true,
+          sources: decision.sources,
+          alternatives: decision.alternatives,
+          stages: [...stages],
+        }
+      : await arbitrate(env, decision, body.image, imageBytes, stages, options);
+
+  // Cache the pipeline result WITHOUT the per-response cache marker, so a
+  // hit can append its own 'cache:hit' cleanly.
+  await cachePut(kv, key, result);
+  return { ...result, stages: ['cache:miss', ...result.stages] };
 }
 
 // ---------------------------------------------------------------------------
