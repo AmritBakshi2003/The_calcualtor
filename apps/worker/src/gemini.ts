@@ -188,7 +188,12 @@ async function callGeminiOnce(
   apiKey: string,
   model: string,
   payload: GeminiRequestPayload,
-  options: { fetchImpl?: FetchLike; timeoutMs?: number; telemetry?: GeminiTelemetry }
+  options: {
+    fetchImpl?: FetchLike;
+    timeoutMs?: number;
+    telemetry?: GeminiTelemetry;
+    maxOutputTokens?: number;
+  }
 ): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000);
