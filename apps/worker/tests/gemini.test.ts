@@ -124,6 +124,19 @@ describe('generateContent', () => {
     expect(calls).toBe(2);
   });
 
+  it('falls back to the secondary model when the primary reports 503 (capacity exhausted)', async () => {
+    const urls: string[] = [];
+    const fetchImpl: FetchLike = async (url) => {
+      urls.push(String(url));
+      return urls.length === 1 ? new Response('overloaded', { status: 503 }) : GeminiResponse([{ text: '12+3' }]);
+    };
+    await expect(
+      generateContent(env, { parts: [], systemInstruction: 'x' }, { fetchImpl })
+    ).resolves.toBe('12+3');
+    expect(urls).toHaveLength(2);
+    expect(urls[1]).toContain('gemini-3.5-flash-lite');
+  });
+
   it('falls back to the secondary model when the primary 404s, then keeps failing publicly', async () => {
     const urls: string[] = [];
     const fetchImpl: FetchLike = async (url) => {

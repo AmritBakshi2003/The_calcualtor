@@ -285,11 +285,16 @@ export async function generateContent(
           : new GeminiApiError('timeout', 504, 'Gemini request timed out.');
 
       // One recovery attempt, in two controlled shapes:
-      //  - the default model id rotted away (404) → try the fallback model,
-      //    but never second-guess a model the operator pinned;
-      //  - a transient Google-side failure (5xx) or a visible-empty thinking
-      //    response → the same request once more.
-      if (attempt === 0 && !userModel && geminiError.upstreamStatus === 404) {
+      //  - the default model is unavailable (404) or its capacity pool is
+      //    exhausted (503) → try the fallback model, but never second-guess
+      //    a model the operator pinned;
+      //  - a transient Google-side failure (other 5xx) or a visible-empty
+      //    thinking response → the same request once more.
+      if (
+        attempt === 0 &&
+        !userModel &&
+        (geminiError.upstreamStatus === 404 || geminiError.upstreamStatus === 503)
+      ) {
         model = FALLBACK_MODEL_ID;
         continue;
       }
