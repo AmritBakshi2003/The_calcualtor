@@ -13,6 +13,7 @@ import {
   lowConfidenceSymbolCount,
   pickBestCandidate,
   rankSegments,
+  toSegments,
   type BBox,
   type OcrCandidate,
   type OcrSegment,
@@ -197,27 +198,6 @@ export function ScanCalculator() {
     text: data.text,
     confidence: Math.max(0, Math.min(100, data.confidence ?? 0)),
   });
-
-  /** Tesseract's line segmentation -> segments we can rank and crop to. */
-  const toSegments = (result: Tesseract.RecognizeResult): OcrSegment[] =>
-    (result.data.lines ?? [])
-      .map((line) => ({
-        text: line.text ?? '',
-        confidence: line.confidence ?? 0,
-        bbox: line.bbox
-          ? { x0: line.bbox.x0, y0: line.bbox.y0, x1: line.bbox.x1, y1: line.bbox.y1 }
-          : undefined,
-        symbols: (line.words ?? []).flatMap((word) =>
-          (word.symbols ?? []).map((symbol) => ({
-            text: symbol.text ?? '',
-            confidence: symbol.confidence ?? 0,
-            bbox: symbol.bbox
-              ? { x0: symbol.bbox.x0, y0: symbol.bbox.y0, x1: symbol.bbox.x1, y1: symbol.bbox.y1 }
-              : undefined,
-          }))
-        ),
-      }))
-      .filter((segment) => segment.text.trim().length > 0);
 
   /** Copy one line out of the preprocessed canvas, with breathing room. */
   const cropToBbox = (source: HTMLCanvasElement, bbox: BBox): HTMLCanvasElement => {

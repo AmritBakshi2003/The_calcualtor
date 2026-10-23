@@ -1,20 +1,16 @@
 import { useEffect, useRef } from 'react';
 import Tesseract from 'tesseract.js';
+import { SCAN_WHITELIST } from './ocr/normalize';
 
 /**
- * Characters the primary OCR passes are constrained to.
+ * Characters the primary OCR passes are constrained to (Phase 1: the scanner
+ * alphabet — see ocr/normalize.ts, which owns the single source of truth).
  *
  * With a whitelist active Tesseract reports a confidence of 0 for every word
  * (a reporting quirk; the TEXT is noticeably more accurate) so callers treat
  * confidence 0 as "unknown" and fall back to WHITELIST_CONFIDENCE_FALLBACK
- * when scoring. One open pass per scan keeps an unbiased candidate in play: a
- * whitelist forces unmatchable glyphs onto the nearest allowed character, so
- * the open pass can still win when the real text has other glyphs.
+ * when scoring.
  */
-// "√" and "π" stay on the list: removing them made Tesseract coerce a radical
-// or pi glyph onto the nearest digit/operator and silently change the value.
-// cleanForEvaluation maps them to sqrt/pi after recognition.
-export const OCR_WHITELIST = '0123456789+-*/×÷().,=^%xX√π';
 
 /**
  * Parameters the worker is returned to after any one-off pass.
@@ -23,7 +19,7 @@ export const OCR_DEFAULT_PARAMS = {
   tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
   // Without a DPI hint Tesseract guesses (and warns about) the resolution.
   user_defined_dpi: '300',
-  tessedit_char_whitelist: OCR_WHITELIST,
+  tessedit_char_whitelist: SCAN_WHITELIST,
 };
 
 export function useOCRWorker() {
@@ -44,7 +40,10 @@ export function useOCRWorker() {
     const epoch = epochRef.current;
 
     const init = (async () => {
-      const worker = await Tesseract.createWorker('eng', Tesseract.OEM.DEFAULT, {
+      // Phase 1: LSTM engine only (OEM.LSTM_ONLY). The default combined
+      // legacy+LSTM mode is slower and can answer with legacy-engine glyphs
+      // the whitelist then mangles.
+      const worker = await Tesseract.createWorker('eng', Tesseract.OEM.LSTM_ONLY, {
         workerPath: `${import.meta.env.BASE_URL}tesseract/worker.min.js`,
         corePath: `${import.meta.env.BASE_URL}tesseract/`,
         langPath: `${import.meta.env.BASE_URL}tesseract/`,

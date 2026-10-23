@@ -18,6 +18,7 @@
  */
 
 import { evaluateExpression } from '@calculator-suite/math-core';
+import type { RecognizeResult } from 'tesseract.js';
 
 export interface BBox {
   x0: number;
@@ -171,6 +172,32 @@ export function pickBestCandidate<T extends OcrCandidate>(candidates: T[]): T | 
     if (!best || candidate.score > best.score) best = candidate;
   }
   return best;
+}
+
+/**
+ * Tesseract's line segmentation -> segments we can rank, crop to and attach
+ * to candidates. Shared by the ScanCalculator passes and the Phase-1 variant
+ * runner (ocr/recognize.ts).
+ */
+export function toSegments(result: RecognizeResult): OcrSegment[] {
+  return (result.data.lines ?? [])
+    .map((line) => ({
+      text: line.text ?? '',
+      confidence: line.confidence ?? 0,
+      bbox: line.bbox
+        ? { x0: line.bbox.x0, y0: line.bbox.y0, x1: line.bbox.x1, y1: line.bbox.y1 }
+        : undefined,
+      symbols: (line.words ?? []).flatMap((word) =>
+        (word.symbols ?? []).map((symbol) => ({
+          text: symbol.text ?? '',
+          confidence: symbol.confidence ?? 0,
+          bbox: symbol.bbox
+            ? { x0: symbol.bbox.x0, y0: symbol.bbox.y0, x1: symbol.bbox.x1, y1: symbol.bbox.y1 }
+            : undefined,
+        }))
+      ),
+    }))
+    .filter((segment) => segment.text.trim().length > 0);
 }
 
 /** Symbols that survive postprocessing and were read with low confidence. */
