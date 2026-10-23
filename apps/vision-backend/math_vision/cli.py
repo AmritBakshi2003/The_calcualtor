@@ -10,6 +10,7 @@ import argparse
 import json
 import sys
 
+from .env_loader import load_env_file
 from .exceptions import MathVisionError, MissingApiKeyError
 from .pipeline import run_pipeline
 
@@ -43,6 +44,9 @@ def _build_result_payload(result) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Pick up GEMINI_API_KEY from the git-ignored .env when present (values
+    # are read into os.environ only — never printed). Exported variables win.
+    load_env_file()
     parser = argparse.ArgumentParser(
         prog="math_vision",
         description="OCR + Gemini-validated math extraction from an image.",
