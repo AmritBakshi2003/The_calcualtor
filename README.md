@@ -8,7 +8,8 @@ A responsive, accessible web calculator suite with Samsung-style workflow, unit 
 - **Simple Calculator**: Digits, operators, parentheses, keyboard support with Samsung-style workflow
 - **Expandable Scientific Functions**: Trigonometry, logarithms, powers, factorials, degree/radian modes (toggle in-app)
 - **Financial Calculator**: EMI, amortization, compound interest, SIP, ROI, NPV, IRR, tax/GST
-- **Scanner Mode**: Camera capture and image upload with local OCR (Tesseract.js)
+- **Scanner Mode**: Camera capture and image upload with local OCR (Tesseract.js),
+  optionally cross-validated and corrected by Google Gemini (`apps/worker`)
 
 ### Additional Features
 - **Tip Calculator**: Calculate tip amount, total bill, and split per head
@@ -25,7 +26,7 @@ A responsive, accessible web calculator suite with Samsung-style workflow, unit 
 - **State Management**: Zustand
 - **Math**: math.js (expression parsing, trig functions)
 - **Storage**: IndexedDB (via idb)
-- **OCR**: Tesseract.js (browser-side)
+- **OCR**: Tesseract.js (browser-side) with optional Gemini cross-validation (`apps/worker`)
 - **Testing**: Vitest (unit), Playwright (E2E)
 - **CI**: GitHub Actions
 
@@ -93,15 +94,24 @@ npm run typecheck
 
 ### Scanner (OCR)
 - Upload or capture an image of a printed expression, e.g. `12 + 34` or `2 x 45 = 90`
-- Recognition runs locally with Tesseract.js; nothing is uploaded
+- Recognition runs locally with Tesseract.js; when the optional Gemini layer is
+  configured, the same reading is cross-examined by **Google Gemini** against the
+  actual glyph shapes and corrected automatically (misread `÷`, `×`, `O`→`0`, …).
+  The scan shows which engine produced the text and warns when the two disagree.
+- When the local OCR engine reads nothing, the Gemini layer reads the image on its own
+- Local-only mode (no API configured, or offline): pure Tesseract, nothing leaves the browser
 - Multiple passes are ranked (block segmentation, per-line re-read of the line that
   looks most like an expression, single-line fallback), so a date or a total on a
   neighbouring line is not mistaken for the calculation
 - The recognized expression is editable — correct any misread digit before solving
 - Supported: printed digits, `+ - * / ^ ( ) . , %`, `x`/`×`/`÷` as operators,
   calculator screens showing `expression = result`
-- Known limitation: the English model frequently reads `÷` as `+` or `=`; type the
-  operator manually when that happens
+- Word questions ("what is 15% of 350?") and long/deep expressions that the local
+  evaluator declines are answered by Gemini (complexity-gated: simple taps never
+  cost a model call)
+- Known limitation (local-only mode): the English model frequently reads `÷` as `+`
+  or `=`; type the operator manually when that happens — or enable Gemini, which
+  reads the glyphs and corrects it
 
 ### Scientific Functions
 - Toggle between DEG (degrees) and RAD (radians) mode in the scientific section
@@ -127,6 +137,21 @@ syntax tree — never through a general-purpose evaluator.
   `sqrt(-1)`, `log(0)`, `factorial(-1)`, `tan(90°)` return domain errors
 - **Blocked**: assignment, property access, indexing, arrays/objects, and any function
   outside the list above
+
+### Gemini scanner API (optional)
+
+The Scan tab talks to same-origin `/api/scan/*` routes served by `apps/worker`
+alongside the static assets (see `wrangler.jsonc`). The Gemini key lives ONLY on the
+server — never in the browser bundle:
+
+- **Local dev**: `cp apps/worker/.dev.vars.example apps/worker/.dev.vars`, add your key
+  from <https://aistudio.google.com/apikey>, run `npx wrangler dev --config wrangler.jsonc`
+  and open the app in front of it (`/api/*` routes then answer).
+- **Python CLI** (same pipeline, offline-friendly): see `apps/vision-backend/README.md`.
+- **Production**: Cloudflare Workers → your Worker → *Settings* → *Secrets* → add
+  `GEMINI_API_KEY` (and optionally `GEMINI_MODEL`); the deploy itself emits the routes.
+  Without the key the capability route reports `{ "gemini": false }` and the scanner
+  silently stays local-only.
 
 ## Deployment
 
@@ -203,6 +228,9 @@ calculator-suite/
 │       └── public/
 ├── packages/
 │   └── math-core/        # Reusable math library
+├── apps/
+│   └── vision-backend/   # Python CLI mirror of the same OCR+Gemini pipeline
+├── apps/worker/          # Cloudflare Worker: same-origin /api/scan/* (/api/solve/*)
 ├── e2e/                  # Playwright E2E tests
 └── .github/workflows/    # CI configuration
 ```

@@ -2,7 +2,7 @@ name: Verify Updates
 
 on:
   push:
-    branches: [master, fix/ocr-scan-pipeline]
+    branches: [master, fix/ocr-scan-pipeline, feat/gemini-ocr]
   pull_request:
     branches: [master]
   workflow_dispatch:

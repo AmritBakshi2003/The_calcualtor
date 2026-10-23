@@ -21,7 +21,9 @@ export default defineConfig({
     },
     {
       name: 'chromium-mobile',
-      use: { ...devices['iPhone 13'] },
+      // A Chromium-based phone descriptor keeps the mobile project on the same
+      // engine everywhere, so local runs and CI cover the same browser.
+      use: { ...devices['Pixel 7'] },
     },
   ],
   webServer: {

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { evaluateExpression } from '@calculator-suite/math-core';
 import Tesseract from 'tesseract.js';
 import { CameraCapture } from './CameraCapture';
@@ -19,6 +19,13 @@ import {
 } from './ocrScoring';
 import { isBlurry } from './blurDetection';
 import { classifyPlusOrDivide } from './glyphCheck';
+import {
+  fetchGeminiCapabilities,
+  GeminiUnavailableError,
+  recognizeWithGemini,
+  solveWithGemini,
+} from './geminiClient';
+import { assessComplexity, findUnknownWord } from './complexity';
 
 export function ScanCalculator() {
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
@@ -38,11 +45,50 @@ export function ScanCalculator() {
   // True once a recognition attempt has finished (even an empty or failed one),
   // so the edit box stays available for typing the expression manually.
   const [hasScanned, setHasScanned] = useState(false);
+  // Same-origin Gemini API availability (null = probe still running).
+  const [geminiEnabled, setGeminiEnabled] = useState<boolean | null>(null);
+  // Which engine produced the recognized text: 'gemini' (cross-validated),
+  // 'local', or null (nothing recognized yet).
+  const [recognitionSource, setRecognitionSource] = useState<'gemini' | 'local' | null>(null);
+  // True when Gemini and Tesseract returned different readings for the same
+  // scan — the user must verify before trusting either.
+  const [engineDisagreement, setEngineDisagreement] = useState(false);
+  // Degradation notice when the Gemini call did not succeed (missing key,
+  // rate limit, offline). Local recognition continues to carry the scan.
+  const [geminiMessage, setGeminiMessage] = useState<string | null>(null);
+  // True while a Gemini solve call is in flight.
+  const [geminiBusy, setGeminiBusy] = useState(false);
+  // True when the displayed result was computed by Gemini (complex question).
+  const [solvedByGemini, setSolvedByGemini] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Set when the user edits while a recognition pass is still running; the
   // result must not overwrite what they typed.
   const editedWhileProcessingRef = useRef(false);
   const { getWorker, terminateWorker } = useOCRWorker();
+
+  // Probe the same-origin capabilities once: ON = Gemini cross-validation is
+  // available, OFF/null = the scanner silently stays local-only.
+  useEffect(() => {
+    let alive = true;
+    fetchGeminiCapabilities().then((caps) => {
+      if (alive) setGeminiEnabled(caps.gemini);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /** Reset everything a fresh recognition attempt must not inherit. */
+  const resetRecognitionState = () => {
+    setError(null);
+    setBlurWarning(false);
+    setLowConfidenceIndices([]);
+    setAmbiguousCorrections([]);
+    setGeminiMessage(null);
+    setEngineDisagreement(false);
+    setRecognitionSource(null);
+    setSolvedByGemini(false);
+  };
 
   // Guard against oversized uploads (the accept attribute is only a UI hint).
   const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15MB
@@ -133,6 +179,12 @@ export function ScanCalculator() {
     }
   };
 
+  /**
+   * Copy the local OCR machinery untouched; when the same-origin Gemini
+   * layer is available, its answer is cross-checked against the local
+   * winner below (Gemini wins — the user still sees a disagreement
+   * warning when both engines read different characters).
+   */
   /** Raw OCR text -> expression the evaluator accepts. */
   const toExpression = (raw: string) => cleanForEvaluation(postprocessOCR(raw.trim()));
 
@@ -278,6 +330,7 @@ export function ScanCalculator() {
         // Record WHICH look-alikes were auto-corrected so the UI can warn.
         substitutions: expression ? ambiguousSubstitutions(raw) : [],
         score: expressionScore(expression, honest.confidence, raw),
+        rawText: raw,
       });
     };
 
@@ -338,9 +391,7 @@ export function ScanCalculator() {
     setIsProcessing(true);
     editedWhileProcessingRef.current = false;
     setError(null);
-    setBlurWarning(false);
-    setLowConfidenceIndices([]);
-    setAmbiguousCorrections([]);
+    resetRecognitionState();
 
     try {
       // Preprocess image
@@ -372,21 +423,56 @@ export function ScanCalculator() {
         best = await runRecognition(preprocessedCanvas);
       }
 
-      const processedText = best?.expression ?? '';
-      // Whitelist passes report confidence 0 no matter how accurate the text
-      // was (= WHITELIST_CONFIDENCE_FALLBACK), so a score is only shown when
-      // the winning pass could actually measure one.
-      const confidenceKnown = best?.confidenceKnown ?? false;
-      const lowCount = confidenceKnown ? lowConfidenceSymbolCount(best?.segment) : 0;
+      // Classic local pipeline first — it is instant, offline, and produces
+      // the OCR hint (or the fallback flag) the vision layer cross-examines.
+      const localBest = best;
+      let processedText = localBest?.expression ?? '';
+      let source: 'gemini' | 'local' | null = processedText ? 'local' : null;
+      let disagreement = false;
+
+      if (geminiEnabled) {
+        try {
+          const hint = localBest?.rawText?.trim() ? localBest.rawText.trim() : null;
+          const gemini = await recognizeWithGemini(capturedImage, hint);
+          if (gemini.expression) {
+            // Spacing is presentation: compare compacted readings so a
+            // harmless space difference cannot hide a real correction.
+            const normalizedLocal = processedText.replace(/\s+/g, '');
+            disagreement = Boolean(normalizedLocal) && gemini.expression !== normalizedLocal;
+            processedText = gemini.expression;
+            source = 'gemini';
+          }
+          // gemini.unreadable && processedText → the local reading stands.
+          // gemini.unreadable && !processedText → the "nothing readable"
+          // message below applies to both engines.
+        } catch (error) {
+          // Any Gemini failure degrades to the proven local flow.
+          setGeminiMessage(
+            error instanceof GeminiUnavailableError
+              ? `${error.message} Local recognition is still active.`
+              : 'Gemini is unreachable — local recognition is still active.'
+          );
+          if (import.meta.env.DEV) console.warn('Gemini recognition failed:', error);
+        }
+      }
+
+      // A per-character confidence only exists for the winning LOCAL pass;
+      // a Gemini-validated result shows its cross-check state instead.
+      const confidenceKnown = source === 'local' ? (localBest?.confidenceKnown ?? false) : false;
+      const lowCount = confidenceKnown ? lowConfidenceSymbolCount(localBest?.segment) : 0;
       setLowConfidenceIndices(Array.from({ length: lowCount }, (_, i) => i));
 
       if (!editedWhileProcessingRef.current) {
         setRecognizedText(processedText);
         // A confidence score is meaningless when nothing was read.
-        setConfidence(processedText && confidenceKnown ? best?.confidence ?? null : null);
+        setConfidence(processedText && confidenceKnown ? localBest?.confidence ?? null : null);
         // Surface which ambiguous characters were auto-corrected so a misread
         // like "O" keeps getting caught even when confidence reads fine.
-        setAmbiguousCorrections(processedText ? best?.substitutions ?? [] : []);
+        setAmbiguousCorrections(
+          processedText && source === 'local' ? localBest?.substitutions ?? [] : []
+        );
+        setRecognitionSource(processedText ? source : null);
+        setEngineDisagreement(disagreement);
       }
 
       if (!processedText) {
@@ -407,7 +493,60 @@ export function ScanCalculator() {
     }
   };
 
+  /**
+   * Ask Gemini to solve the current question. Used automatically when local
+   * evaluation fails on a genuinely complex question (complexity gate) and
+   * manually via the "Ask Gemini" button.
+   */
+  const askGeminiSolve = async (question: string): Promise<boolean> => {
+    if (!geminiEnabled) return false;
+    setGeminiBusy(true);
+    setError(null);
+    setResult(null);
+    setSolvedByGemini(false);
+    try {
+      const solved = await solveWithGemini(question.trim().slice(0, 500));
+      if (solved.answer === null) {
+        setError('Gemini could not determine a numeric answer for this question — edit the expression or re-scan.');
+        setResult(null);
+        setSolvedByGemini(false);
+        return false;
+      }
+      setResult(solved.answer);
+      setError(null);
+      setSolvedByGemini(true);
+      return true;
+    } catch (err) {
+      setError(
+        err instanceof GeminiUnavailableError
+          ? err.message
+          : 'Gemini solving is unavailable right now.'
+      );
+      setResult(null);
+      setSolvedByGemini(false);
+      return false;
+    } finally {
+      setGeminiBusy(false);
+    }
+  };
+
   const handleSolve = () => {
+    // Word questions must never reach the arithmetic cleaner: it strips the
+    // words and silently turns "what is 15% of 350" into 15*350 = 5250.
+    // A question with actual word content always goes to Gemini when the
+    // server supports it, and fails loudly with an explanation when not.
+    if (findUnknownWord(recognizedText.trim())) {
+      if (geminiEnabled) {
+        void askGeminiSolve(recognizedText);
+      } else {
+        setError(
+          'This looks like a word question. Word math needs Google Gemini, which is not available from this server — retype the numbers as an expression.'
+        );
+        setResult(null);
+      }
+      return;
+    }
+
     // Clean again: the user may have edited the text (typed ×, ÷, a trailing "=", ...)
     const expression = cleanForEvaluation(recognizedText);
     if (!expression) {
@@ -423,14 +562,26 @@ export function ScanCalculator() {
       return;
     }
 
+    setSolvedByGemini(false);
     try {
       const evalResult = evaluateExpression(expression);
       if (evalResult.success) {
         setResult(evalResult.result as string);
         setError(null);
       } else {
-        setError(evalResult.error || 'Invalid expression');
-        setResult(null);
+        const localError = evalResult.error || 'Invalid expression';
+        // Complexity-activated Gemini solving: only genuinely hard questions
+        // (word problems, long/deep expressions) cost a model call. A simple
+        // misread digit stays a manual correction, exactly as before.
+        const complexity = assessComplexity(expression, true);
+        if (geminiEnabled && complexity.complex) {
+          void askGeminiSolve(expression);
+        } else if (geminiEnabled && !complexity.complex) {
+          setError(localError);
+        } else {
+          setError(localError);
+        }
+        if (!geminiEnabled) setResult(null);
       }
     } catch (err) {
       setError('Failed to evaluate expression');
@@ -448,6 +599,14 @@ export function ScanCalculator() {
     setBlurWarning(false);
     setLowConfidenceIndices([]);
     setAmbiguousCorrections([]);
+    setGeminiMessage(null);
+    setRecognitionSource(null);
+    setEngineDisagreement(false);
+    setSolvedByGemini(false);
+    setGeminiMessage(null);
+    setRecognitionSource(null);
+    setEngineDisagreement(false);
+    setSolvedByGemini(false);
     setHasScanned(false);
   };
 
@@ -507,19 +666,53 @@ export function ScanCalculator() {
     setBlurWarning(false);
     setLowConfidenceIndices([]);
     setAmbiguousCorrections([]);
+    setGeminiMessage(null);
+    setRecognitionSource(null);
+    setEngineDisagreement(false);
+    setSolvedByGemini(false);
     setHasScanned(false);
   };
 
   return (
     <div className="max-w-4xl mx-auto px-2 sm:px-0 space-y-4 sm:space-y-6">
       <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-4 sm:p-6">
-        <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mb-3 sm:mb-4">
-          Scan Calculator
-        </h2>
+        <div className="flex items-center justify-between mb-3 sm:mb-4">
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">
+            Scan Calculator
+          </h2>
+          <span
+            data-testid="scan-engine-badge"
+            className={`ml-2 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${
+              geminiEnabled === true
+                ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300'
+                : geminiEnabled === false
+                ? 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                : 'animate-pulse bg-gray-100 text-gray-400 dark:bg-gray-800'
+            }`}
+          >
+            {geminiEnabled === true
+              ? '✨ Powered by Google Gemini'
+              : geminiEnabled === false
+              ? 'Local recognition only'
+              : 'Checking engines…'}
+          </span>
+        </div>
 
         <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
           <p className="text-xs sm:text-sm text-blue-800 dark:text-blue-200">
-            ℹ️ Scanner v1: Supports printed arithmetic and simple expressions. Handwriting, fractions, and advanced equations are not supported.
+            {geminiEnabled === true ? (
+              <>
+                ✨ Lens-style scanning: your photo is cross-examined by Google Gemini against the
+                local OCR reading, so misread digits and operators (÷, ×, O→0) are corrected
+                automatically. Complex questions are solved by Gemini. When offline, recognition
+                runs locally.
+              </>
+            ) : (
+              <>
+                ℹ️ Scanner: Supports printed arithmetic and simple expressions. Handwriting,
+                fractions, and advanced equations are not supported.
+              </>
+            )}
           </p>
         </div>
 
@@ -628,6 +821,8 @@ export function ScanCalculator() {
                   setError(null);
                   setLowConfidenceIndices([]);
                   setAmbiguousCorrections([]);
+                  setSolvedByGemini(false);
+                  setEngineDisagreement(false);
                 }}
                 spellCheck={false}
                 autoCapitalize="off"
@@ -660,6 +855,27 @@ export function ScanCalculator() {
                   )}
                 </div>
               )}
+              {recognitionSource === 'gemini' && !engineDisagreement && (
+                <p className="mt-1 sm:mt-2 text-xs sm:text-sm text-purple-600 dark:text-purple-300" data-testid="recognition-source">
+                  ✨ Cross-validated by Google Gemini
+                </p>
+              )}
+              {recognitionSource === 'gemini' && engineDisagreement && (
+                <p role="status" className="mt-1 sm:mt-2 text-xs sm:text-sm text-amber-600 dark:text-amber-400" data-testid="recognition-source">
+                  ⚠️ Gemini and the local OCR engine read this differently — please verify the
+                  expression above before solving.
+                </p>
+              )}
+              {geminiEnabled === true && recognitionSource !== 'gemini' && recognitionSource !== null && (
+                <p className="mt-1 sm:mt-2 text-xs sm:text-sm text-gray-500 dark:text-gray-400" data-testid="recognition-source">
+                  📷 Recognized locally (offline mode)
+                </p>
+              )}
+              {geminiMessage && (
+                <p role="status" className="mt-1 sm:mt-2 text-xs sm:text-sm text-amber-600 dark:text-amber-400">
+                  {geminiMessage}
+                </p>
+              )}
               {ambiguousCorrections.length > 0 && (
                 <p
                   role="status"
@@ -673,10 +889,21 @@ export function ScanCalculator() {
 
             <button
               onClick={handleSolve}
-              className="w-full p-3 sm:p-4 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition-colors text-xs sm:text-sm"
+              disabled={geminiBusy}
+              className="w-full p-3 sm:p-4 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed text-xs sm:text-sm"
             >
-              Solve Expression
+              {geminiBusy ? '🤖 Solving with Gemini…' : 'Solve Expression'}
             </button>
+            {geminiEnabled === true && recognizedText && (
+              <button
+                onClick={() => void askGeminiSolve(cleanForEvaluation(recognizedText) || recognizedText)}
+                disabled={geminiBusy}
+                data-testid="ask-gemini"
+                className="w-full p-3 bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 rounded-lg font-medium hover:bg-purple-200 dark:hover:bg-purple-900/60 transition-colors disabled:bg-gray-300 dark:disabled:bg-gray-700 disabled:cursor-not-allowed text-xs sm:text-sm"
+              >
+                🤖 Solve this with Google Gemini
+              </button>
+            )}
           </div>
         )}
 
@@ -684,9 +911,14 @@ export function ScanCalculator() {
         {result && (
           <div className="p-3 sm:p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
             <h4 className="font-semibold text-gray-900 dark:text-white mb-2 text-sm sm:text-base">Result</h4>
-            <div className="text-xl sm:text-2xl font-mono text-green-700 dark:text-green-400">
+            <div className="text-xl sm:text-2xl font-mono text-green-700 dark:text-green-400" data-testid="scan-result">
               {result}
             </div>
+            {solvedByGemini && (
+              <p className="mt-2 text-xs sm:text-sm text-purple-600 dark:text-purple-300">
+                ✨ Computed by Google Gemini (complex question beyond local evaluation)
+              </p>
+            )}
           </div>
         )}
 

@@ -28,6 +28,7 @@ __pycache__/
 
 # Environment variables
 .env
+.dev.vars
 .env.local
 .env.development.local
 .env.test.local
@@ -64,3 +65,4 @@ packages/*/src/**/*.d.ts.map
 
 # Tool-generated files
 .freebuff/
+.wrangler/

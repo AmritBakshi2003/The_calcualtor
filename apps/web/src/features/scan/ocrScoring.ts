@@ -53,6 +53,8 @@ export interface OcrCandidate {
   segment?: OcrSegment;
   /** Ambiguous characters this pass auto-corrected, e.g. ["O→0", "l→1"]. */
   substitutions?: string[];
+  /** The raw pre-cleaning text this pass read (the cross-check hint sent to Gemini). */
+  rawText?: string;
 }
 
 /**

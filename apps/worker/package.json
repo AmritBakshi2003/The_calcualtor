@@ -1,0 +1,9 @@
+{
+  "name": "@calculator-suite/worker",
+  "type": "module",
+  "scripts": {
+    "test:run": "vitest --run",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit"
+  }
+}
