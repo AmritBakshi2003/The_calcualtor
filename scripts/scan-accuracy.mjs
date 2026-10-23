@@ -56,6 +56,10 @@ if (files.length === 0) {
 let pass = 0;
 const failures = [];
 
+/** Free-tier friendliness: spacing between images, one retry on transient 429/504. */
+const SPACING_MS = process.env.SCAN_SPACING_MS ? parseInt(process.env.SCAN_SPACING_MS, 10) : 8000;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 for (const file of files) {
   const expected = normalize(basename(file, extname(file)));
   const bytes = readFileSync(join(dir, file));
@@ -66,11 +70,20 @@ for (const file of files) {
   };
   const label = `${file}  →  expected ${expected}`;
   try {
-    const response = await fetch(`${base}/api/scan/recognize`, {
+    let response = await fetch(`${base}/api/scan/recognize`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if ((response.status === 429 || response.status === 504) && !process.env.SCAN_NO_RETRY) {
+      console.log(`  … ${file}: HTTP ${response.status}, retrying once after a cool-down`);
+      await sleep(SPACING_MS);
+      response = await fetch(`${base}/api/scan/recognize`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    }
     const payload = await response.json();
     if (!response.ok) {
       failures.push(`${label}\n      HTTP ${response.status}: ${JSON.stringify(payload)}`);
@@ -91,6 +104,7 @@ for (const file of files) {
   } catch (error) {
     failures.push(`${label}\n      request failed: ${error.message}`);
   }
+  if (SPACING_MS > 0) await sleep(SPACING_MS);
 }
 
 console.log(`\n${pass}/${files.length} exact matches`);
