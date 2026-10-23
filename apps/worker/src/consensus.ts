@@ -203,6 +203,63 @@ export function parseConsensusImage(
 }
 
 // ---------------------------------------------------------------------------
+// Step 4: daily call counters (KV) resetting at midnight Pacific.
+// ---------------------------------------------------------------------------
+
+export const DAILY_FLASHLITE_CAP = 450;
+export const DAILY_SECOND_OPINION_CAP = 15;
+/** How long a 429 marks Gemini busy. */
+export const BUSY_MARKER_TTL_SECONDS = 60;
+const BUSY_KEY = 'gemini:busy';
+
+/** YYYY-MM-DD in America/Los_Angeles — the counter key rolls at midnight Pacific. */
+export function pacificDateKey(now = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+}
+
+async function readCount(kv: KVNamespace | undefined, key: string): Promise<number> {
+  if (!kv) return 0;
+  try {
+    const value = Number(await kv.get(key));
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Best-effort increment; KV counters are SOFT caps (per-isolate races overshoot slightly). */
+async function bumpCount(kv: KVNamespace | undefined, key: string): Promise<void> {
+  if (!kv) return;
+  try {
+    const next = (await readCount(kv, key)) + 1;
+    await kv.put(key, String(next), { expirationTtl: 48 * 60 * 60 });
+  } catch {
+    // Quota tracking failures never fail the pipeline.
+  }
+}
+
+/**
+ * Final result shape (Phase 3, step 5): everything the scanner needs to
+ * show, flag and debug one scan.
+ */
+export interface ConsensusResult {
+  expression: string;
+  /** True ONLY for consensus, or when an arbiter answer matched a candidate. */
+  verified: boolean;
+  /** Engine/variant sources behind `expression`. */
+  sources: string[];
+  /** Other distinct readings, best-first, capped at 3. */
+  alternatives: string[];
+  /** Human-readable pipeline trace, in order. */
+  stages: string[];
+}
+
+// ---------------------------------------------------------------------------
 // Step 3: the Gemini arbiter — called ONLY on needs_arbiter.
 // ---------------------------------------------------------------------------
 
@@ -386,5 +443,168 @@ export async function callArbiterModel(
       return { status: 'busy', model };
     }
     return { status: 'error', model };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Step 4 (flow): run the arbiter with all its protection rules.
+// ---------------------------------------------------------------------------
+
+function arbiterFallback(decision: Decision, stages: string[]): ConsensusResult {
+  const best = decision.topCandidates[0];
+  return {
+    expression: best?.expression ?? '',
+    verified: false,
+    sources: best ? best.sources : [],
+    alternatives: decision.topCandidates.slice(1, 4).map((c) => c.expression),
+    stages,
+  };
+}
+
+/**
+ * The Gemini arbiter, gated by every protection rule:
+ *  - skipped entirely when the image exceeds the 1024px long side (the
+ *    client resizes; the server refuses to upload oversized crops),
+ *  - skipped while a previous 429 left the busy marker up,
+ *  - skipped once the flash-lite daily counter is past its soft cap (450,
+ *    resetting midnight Pacific) — the best OCR reading ships, verified:false,
+ *  - flash-lite first; only when it matches NO candidate, one second opinion
+ *    with gemini-3.8-flash, under its own 15/day cap,
+ *  - a matching answer makes the result verified:true and joins the sources.
+ */
+export async function arbitrate(
+  env: { GEMINI_API_KEY?: string; GEMINI_MODEL?: string; SCAN_CACHE?: KVNamespace },
+  decision: Decision,
+  image: { base64: string; mime: AllowedImageMime },
+  imageBytes: Uint8Array,
+  stages: string[],
+  options: { fetchImpl?: FetchLike } = {}
+): Promise<ConsensusResult> {
+  if (!env.GEMINI_API_KEY?.trim()) {
+    stages.push('arbiter:skipped:not_configured');
+    return arbiterFallback(decision, stages);
+  }
+
+  const dims = imageDimensions(imageBytes);
+  if (dims && Math.max(dims.width, dims.height) > ARBITER_IMAGE_MAX_SIDE) {
+    stages.push('arbiter:skipped:image_too_large');
+    return arbiterFallback(decision, stages);
+  }
+
+  const kv = env.SCAN_CACHE;
+  if (kv) {
+    try {
+      if (await kv.get(BUSY_KEY)) {
+        stages.push('arbiter:skipped:busy');
+        return arbiterFallback(decision, stages);
+      }
+    } catch {
+      // Busy-marker read failure is not a reason to skip.
+    }
+  }
+
+  const dayKey = pacificDateKey();
+  const flashLiteCount = await readCount(kv, `gemini:flashlite:${dayKey}`);
+  if (flashLiteCount >= DAILY_FLASHLITE_CAP) {
+    stages.push('arbiter:skipped:daily_cap');
+    return arbiterFallback(decision, stages);
+  }
+  await bumpCount(kv, `gemini:flashlite:${dayKey}`);
+
+  const candidateExpressions = decision.topCandidates.map((c) => c.expression);
+  const prompt = buildArbiterPrompt(decision.topCandidates);
+  const primary = await callArbiterModel(
+    env,
+    ARBITER_PRIMARY_MODEL,
+    image,
+    prompt,
+    candidateExpressions,
+    options
+  );
+
+  switch (primary.status) {
+    case 'match':
+      stages.push(`arbiter:${ARBITER_PRIMARY_MODEL}:match`);
+      return {
+        expression: primary.answer!.expression,
+        verified: true,
+        sources: [...(decision.topCandidates[0]?.sources ?? []), `gemini:${ARBITER_PRIMARY_MODEL}`],
+        alternatives: decision.topCandidates.slice(0, 3).map((c) => c.expression),
+        stages,
+      };
+    case 'busy':
+      stages.push(`arbiter:${ARBITER_PRIMARY_MODEL}:429:busy`);
+      if (kv) {
+        try {
+          await kv.put(BUSY_KEY, '1', { expirationTtl: BUSY_MARKER_TTL_SECONDS });
+        } catch {
+          // Busy marking is best-effort.
+        }
+      }
+      return arbiterFallback(decision, stages);
+    case 'error':
+      // 5xx already retried once inside generateContent; still failing.
+      stages.push(`arbiter:${ARBITER_PRIMARY_MODEL}:error`);
+      return arbiterFallback(decision, stages);
+    case 'parse_failed':
+      stages.push(`arbiter:${ARBITER_PRIMARY_MODEL}:parse_failed`);
+      break; // matches no candidate -> second opinion
+    case 'no_match':
+      stages.push(`arbiter:${ARBITER_PRIMARY_MODEL}:no_match`);
+      break;
+  }
+
+  const secondCount = await readCount(kv, `gemini:second:${dayKey}`);
+  if (secondCount >= DAILY_SECOND_OPINION_CAP) {
+    stages.push('arbiter:second:skipped:cap');
+    return arbiterFallback(decision, stages);
+  }
+  await bumpCount(kv, `gemini:second:${dayKey}`);
+
+  const second = await callArbiterModel(
+    env,
+    ARBITER_SECOND_MODEL,
+    image,
+    prompt,
+    candidateExpressions,
+    options
+  );
+
+  switch (second.status) {
+    case 'match':
+      stages.push(`arbiter:${ARBITER_SECOND_MODEL}:match`);
+      return {
+        expression: second.answer!.expression,
+        verified: true,
+        sources: [...(decision.topCandidates[0]?.sources ?? []), `gemini:${ARBITER_SECOND_MODEL}`],
+        alternatives: decision.topCandidates.slice(0, 3).map((c) => c.expression),
+        stages,
+      };
+    case 'no_match':
+    case 'parse_failed':
+      // Two independent arbiter readings, neither matching a candidate: the
+      // newest reading ships unverified, the OCR readings stay as alternatives.
+      stages.push(`arbiter:${ARBITER_SECOND_MODEL}:${second.status}`);
+      return {
+        expression: second.answer?.expression ?? decision.expression,
+        verified: false,
+        sources: [`gemini:${ARBITER_SECOND_MODEL}`],
+        alternatives: decision.topCandidates.slice(0, 3).map((c) => c.expression),
+        stages,
+      };
+    case 'busy':
+      stages.push(`arbiter:${ARBITER_SECOND_MODEL}:429:busy`);
+      if (kv) {
+        try {
+          await kv.put(BUSY_KEY, '1', { expirationTtl: BUSY_MARKER_TTL_SECONDS });
+        } catch {
+          // Best-effort.
+        }
+      }
+      return arbiterFallback(decision, stages);
+    case 'error':
+    default:
+      stages.push(`arbiter:${ARBITER_SECOND_MODEL}:error`);
+      return arbiterFallback(decision, stages);
   }
 }
