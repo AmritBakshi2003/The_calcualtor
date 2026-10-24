@@ -60,3 +60,5 @@ packages/*/src/**/*.d.ts.map
 
 # Tool-generated files
 .freebuff/
+.freebuff-sites-build/
+.wrangler/
