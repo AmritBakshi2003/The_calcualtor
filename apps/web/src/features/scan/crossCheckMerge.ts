@@ -45,7 +45,11 @@ export function mergeCrossChecks(
 ): CrossCheckOutcome {
   const usable = remotes.filter((r) => r.parses && r.text.trim());
   if (localQuality === 'parses') {
-    return { expression: localText, source: 'local', hasSuggestion: false };
+    // The local reading stands, but a disagreeing validated remote reading is
+    // exactly what the cross-check summary is for: flag it as a suggestion.
+    const compactLocal = localText.replace(/\s+/g, '');
+    const disagrees = usable.some((r) => r.text.replace(/\s+/g, '') !== compactLocal);
+    return { expression: localText, source: 'local', hasSuggestion: disagrees };
   }
   if (localQuality === 'missing') {
     // Prefer remote readings in cross-engine order: OCR.space is an actual

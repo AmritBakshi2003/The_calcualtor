@@ -128,6 +128,54 @@ const CASES: CaseSpec[] = [
     height: 260,
     family: 'DejaVu Sans Mono',
   },
+  {
+    name: 'multi-operator',
+    lines: ['12 + 5 - 3 * 2'],
+    expected: '12+5-3*2',
+    fontSize: 56,
+  },
+  {
+    name: 'nested-parens',
+    lines: ['(12 + (3 * 2))'],
+    expected: '(12+(3*2))',
+    fontSize: 56,
+  },
+  {
+    name: 'decimal-divide',
+    lines: ['7.5 / 2.5'],
+    expected: '7.5/2.5',
+    fontSize: 58,
+  },
+  {
+    // Thin grey pen on paper — strokes the eng model reads worst.
+    name: 'pen-thin-note',
+    lines: ['23 + 47'],
+    expected: '23+47',
+    weight: 'normal',
+    color: '#3a3a3a',
+    fontSize: 54,
+    bg: '#f8f6f1',
+  },
+  {
+    // Tilted snapshot of a written line, slight motion blur.
+    name: 'tilted-note',
+    lines: ['96 / 8'],
+    expected: '96/8',
+    rotate: 2.5,
+    blur: 0.6,
+    bg: '#fbfaf6',
+    color: '#2b2b2b',
+    fontSize: 56,
+  },
+  {
+    name: 'smudged-photo',
+    lines: ['45 * 11'],
+    expected: '45*11',
+    noise: 18,
+    blur: 0.4,
+    color: '#2b2b2b',
+    fontSize: 56,
+  },
 ];
 
 /** Draw one case on a canvas inside the browser and return a data URL. */

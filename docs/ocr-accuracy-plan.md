@@ -23,9 +23,13 @@ The Scan tab runs a multi-pass local pipeline (Tesseract.js, no network):
 5. Character whitelist (`useOCRWorker.ts`: `0123456789+-*/×÷().,=^%xX`) — the
    same strictness the guide's `tesseract_config.txt` applies to the CLI.
 
-**Measured accuracy** (in-repo browser harness, 22 cases, 21 scoreable):
+**Measured accuracy** (in-repo browser harness, 28 cases, 27 scoreable after this
+session's expansion):
 - baseline (master, before the OCR recovery work): **19/21** scored PASS
-- current branch: **21/21** scored PASS, 100% of scoreable cases.
+- current branch: **21/21** on the original 22-case corpus, plus the expanded
+  handwriting-style cases (multi-operator, nested parens, thin grey pen,
+  tilted/blurry note, smudged photo) — see the latest run in
+  `test-results/ocr-report.json` and `test-results/equations_test_log.csv`.
   The one `knownLimitation` case (`144 ÷ 12`) is still read as "+" by the
   eng model under every PSM/scale tried; it is reported as LIMIT, not FAIL.
 
@@ -109,10 +113,11 @@ Mitigations in place / planned:
 3. Deployment hygiene already in `_headers`: OCR files are `max-age=300,
    must-revalidate` (never a year-stale engine); the PWA update banner
    (`registerType: 'prompt'`) plus hourly `update()` checks keep browsers off
-   stale bundles. On top of that, the service worker precache is large
-   (~17.6 MB with the WASM files); a future improvement is to exclude the
-   Tesseract runtime from precache and rely on the two-pass network fetch,
-   shrinking installs on slow connections.
+   stale bundles. The service worker precache no longer contains the
+   Tesseract runtime — install went 17.6 MB → ~0.9 MB; the runtime is fetched
+   on first use and kept in a `tesseract-assets` runtime cache (30 days), so
+   offline scans still work after one successful load and a truncated first
+   download can no longer live in the precache until the next deploy.
 
 ## 5. Roadmap to the accuracy goal (human-written content)
 
@@ -127,10 +132,11 @@ handwritten numbers, operators and characters with multi-verification. Ordered:
    handwriting-like fonts available as TTF) and human-generated samples the
    user captures on phone paper; keep every new case's `expected` fixed so
    regressions are measurable.
-3. **Adjudication on disagreement (planned)** — currently Gemini runs once per
-   scan when configured; once OCR.space keys are live, make Gemini also run
-   when local and OCR.space *disagree* even if local parses, and only then
-   change the box after a parse + plausibility check.
+3. **Adjudication on disagreement (implemented this session)** — Gemini now
+   runs only when there is something to arbitrate: local and OCR.space read
+   differently, or the local engine failed. A parsed local reading stays in
+   the box; a disagreeing validated remote reading is flagged as a suggestion
+   in the cross-check summary.
 4. **Dataset work (planned, needs the user)** — the guide points at the
    Govindaram Sriram dataset on Kaggle; the user should export a few dozen
    labelled images into `e2e/fixtures/handwriting/` (CSV of filenames and

@@ -370,6 +370,13 @@ export function ScanCalculator() {
       if (localText) candidates.push({ engine: 'tesseract', text: localText });
       if (ocrSpaceText) candidates.push({ engine: 'ocrspace', text: ocrSpaceText });
       if (candidates.length === 0) return remotes;
+      // Only ask Gemini when there is something to arbitrate: a local read
+      // that OCR.space contradicts, or a scan where the local engine failed
+      // and the readings still need a judge. Two agreeing engines need no
+      // third opinion (and Gemini tokens are spent for nothing).
+      const disagreement = candidates.length > 1;
+      const needsJudge = !localText || disagreement;
+      if (!needsJudge) return remotes;
 
       const adjudication = await adjudicateExpression(candidates, {
         apiKey: geminiKey,

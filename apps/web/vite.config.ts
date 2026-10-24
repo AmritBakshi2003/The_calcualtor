@@ -31,8 +31,28 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg}'],
+        // The Tesseract runtime (4 wasm.js files, ~17 MB) must NOT be
+        // precached: a 17 MB install makes the first SW update slow/flaky on
+        // mobile, and a truncated download would be pinned until the next
+        // deploy. It is fetched on first use and then served from the
+        // runtime cache below, so offline scans keep working after one scan.
+        globIgnores: ['**/tesseract/**'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
         runtimeCaching: [
+          {
+            urlPattern: /\/tesseract\/.*/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'tesseract-assets',
+              expiration: {
+                maxEntries: 30,
+                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
             handler: 'CacheFirst',

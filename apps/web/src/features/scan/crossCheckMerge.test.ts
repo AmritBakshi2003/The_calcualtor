@@ -13,6 +13,18 @@ describe('mergeCrossChecks', () => {
     });
   });
 
+  it('flags a suggestion when a remote reading disagrees with a parsed local read', () => {
+    const other: RemoteRead = { engine: 'gemini', text: '144+12', parses: true, confidence: 0.7 };
+    const outcome = mergeCrossChecks('parses', '144/12', [other]);
+    expect(outcome).toEqual({ expression: '144/12', source: 'local', hasSuggestion: true });
+  });
+
+  it('ignores disagreeing remote reads that do not parse', () => {
+    const bad: RemoteRead = { engine: 'gemini', text: '144+12', parses: false, confidence: 0.9 };
+    const outcome = mergeCrossChecks('parses', '144/12', [bad]);
+    expect(outcome).toEqual({ expression: '144/12', source: 'local', hasSuggestion: false });
+  });
+
   it('falls back to OCR.space when the local engine produced nothing', () => {
     expect(mergeCrossChecks('missing', '', [ocrSpace, gemini])).toEqual({
       expression: '144/12',
