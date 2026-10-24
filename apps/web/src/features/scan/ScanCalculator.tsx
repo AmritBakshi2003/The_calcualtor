@@ -18,6 +18,24 @@ import {
 } from './ocrScoring';
 import { isBlurry } from './blurDetection';
 import { classifyPlusOrDivide } from './glyphCheck';
+import {
+  getOcrSpaceKey,
+  readEquationOcrSpace,
+  setOcrSpaceKey as persistOcrSpaceKey,
+} from './ocrSpace';
+import {
+  DEFAULT_GEMINI_MODEL,
+  adjudicateExpression,
+  getGeminiKey,
+  getGeminiModel,
+  setGeminiKey as persistGeminiKey,
+  setGeminiModel as persistGeminiModel,
+} from './geminiOCR';
+import {
+  mergeCrossChecks,
+  type CrossCheckOutcome,
+  type RemoteRead,
+} from './crossCheckMerge';
 
 export function ScanCalculator() {
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
@@ -33,6 +51,17 @@ export function ScanCalculator() {
   // True once a recognition attempt has finished (even an empty or failed one),
   // so the edit box stays available for typing the expression manually.
   const [hasScanned, setHasScanned] = useState(false);
+  // Remote cross-check keys are read once from localStorage and edited via the
+  // settings disclosure; the saved values live in refs so the recognize flow
+  // always reads the persisted state, never a half-typed input.
+  const [apiSettingsOpen, setApiSettingsOpen] = useState(false);
+  const [ocrSpaceKeyInput, setOcrSpaceKeyInput] = useState(() => getOcrSpaceKey());
+  const [geminiKeyInput, setGeminiKeyInput] = useState(() => getGeminiKey());
+  const [geminiModelInput, setGeminiModelInput] = useState(() => getGeminiModel());
+  const ocrSpaceKeyRef = useRef(getOcrSpaceKey());
+  const geminiKeyRef = useRef(getGeminiKey());
+  const geminiModelRef = useRef(getGeminiModel());
+  const [crossCheckSummary, setCrossCheckSummary] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Set when the user edits while a recognition pass is still running; the
   // result must not overwrite what they typed.
@@ -105,6 +134,7 @@ export function ScanCalculator() {
     setResult(null);
     setError(null);
     setHasScanned(false);
+    setCrossCheckSummary(null);
     setShowCamera(true);
   };
 
@@ -248,6 +278,119 @@ export function ScanCalculator() {
     return improved.score >= candidate.score ? improved : candidate;
   };
 
+  /** Runs the expression through the evaluator without throwing. */
+  const evaluatesCleanly = (text: string): boolean => {
+    if (!text.trim()) return false;
+    try {
+      return evaluateExpression(text).success;
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * Downscaled JPEG for remote engines: OCR.space free keys reject large
+   * uploads and a smaller image is a faster Gemini attachment too. Returns
+   * null when canvas rendering is unavailable (tests, blocked contexts).
+   */
+  const toRemoteJpeg = (
+    canvas: HTMLCanvasElement
+  ): { dataUrl: string; base64: string; mime: string } | null => {
+    try {
+      const maxSide = Math.max(canvas.width, canvas.height);
+      const scale = maxSide > 1200 ? 1200 / maxSide : 1;
+      const out = document.createElement('canvas');
+      out.width = Math.max(1, Math.round(canvas.width * scale));
+      out.height = Math.max(1, Math.round(canvas.height * scale));
+      const ctx = out.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(canvas, 0, 0, out.width, out.height);
+      const dataUrl = out.toDataURL('image/jpeg', 0.8);
+      return { dataUrl, base64: dataUrl.split(',')[1] ?? '', mime: 'image/jpeg' };
+    } catch {
+      return null;
+    }
+  };
+
+  /** Human summary for the cross-checks of one scan (empty string = nothing). */
+  const summarizeCrossChecks = (
+    localText: string,
+    remotes: RemoteRead[],
+    merged: CrossCheckOutcome
+  ): string => {
+    if (remotes.length === 0) return '';
+    const parts = remotes.map((r) => {
+      const label = r.engine === 'ocrspace' ? 'OCR.space' : 'Gemini';
+      if (!r.text) return `${label}: no read`;
+      const status = r.parses ? 'parses ✓' : 'does not parse ✗';
+      const conf = r.confidence !== undefined ? ` (${Math.round(r.confidence * 100)}%)` : '';
+      const matches = r.text.replace(/\s+/g, '') === localText.replace(/\s+/g, '');
+      return `${label}: ${matches ? 'agrees' : `reads "${r.text}"`} ${status}${conf}`;
+    });
+    const useNote =
+      merged.source !== 'local' ? ` — using the ${merged.source} reading` :
+      merged.hasSuggestion ? ' — suggestion shown' : '';
+    return `Cross-checks — ${parts.join(' · ')}${useNote}`;
+  };
+
+  /**
+   * Ask the remote engines the user configured (OCR.space, Gemini) for a
+   * second reading. Everything is best-effort: an absent key, a network
+   * hiccup or an unparsable remote answer simply yields no entry, and without
+   * keys this returns nothing and the local pipeline is untouched.
+   */
+  const runCrossChecks = async (
+    preprocessedCanvas: HTMLCanvasElement,
+    localText: string
+  ): Promise<RemoteRead[]> => {
+    const remotes: RemoteRead[] = [];
+    const jpeg = toRemoteJpeg(preprocessedCanvas);
+
+    const ocrSpaceKey = ocrSpaceKeyRef.current;
+    const ocrSpaceTask = (async () => {
+      if (!ocrSpaceKey) return undefined;
+      const read = await readEquationOcrSpace(ocrSpaceKey, jpeg?.dataUrl ?? '');
+      if (!read) {
+        remotes.push({ engine: 'ocrspace', text: '', parses: false });
+        return undefined;
+      }
+      const cleaned = cleanForEvaluation(read.text) || read.text;
+      remotes.push({ engine: 'ocrspace', text: cleaned, parses: evaluatesCleanly(cleaned) });
+      return cleaned;
+    })().catch(() => undefined);
+
+    // Gemini adjudicates all readings at once, so it waits for the OCR.space
+    // read (if any) before composing its candidate list.
+    const ocrSpaceText = await ocrSpaceTask;
+    const geminiKey = geminiKeyRef.current;
+    if (!geminiKey) return remotes;
+
+    try {
+      const candidates: Array<{ engine: string; text: string }> = [];
+      if (localText) candidates.push({ engine: 'tesseract', text: localText });
+      if (ocrSpaceText) candidates.push({ engine: 'ocrspace', text: ocrSpaceText });
+      if (candidates.length === 0) return remotes;
+
+      const adjudication = await adjudicateExpression(candidates, {
+        apiKey: geminiKey,
+        model: geminiModelRef.current || DEFAULT_GEMINI_MODEL,
+        imageBase64: jpeg?.base64,
+        imageMimeType: jpeg?.mime,
+      });
+      if (!adjudication) return remotes;
+      const cleaned = cleanForEvaluation(adjudication.expression) || adjudication.expression;
+      remotes.push({
+        engine: 'gemini',
+        text: cleaned,
+        parses: evaluatesCleanly(cleaned),
+        confidence: adjudication.confidence,
+      });
+    } catch {
+      // Network problems must never take down the local pipeline.
+    }
+    return remotes;
+  };
+
   /** Run every OCR pass over a preprocessed image and return the best candidate. */
   const runRecognition = async (preprocessedCanvas: HTMLCanvasElement): Promise<OcrCandidate | null> => {
     // PNG (lossless) preserves crisp digit edges; JPEG artifacts degrade OCR.
@@ -342,6 +485,7 @@ export function ScanCalculator() {
     setError(null);
     setBlurWarning(false);
     setLowConfidenceIndices([]);
+    setCrossCheckSummary(null);
 
     try {
       // Preprocess image
@@ -381,13 +525,38 @@ export function ScanCalculator() {
       const lowCount = confidenceKnown ? lowConfidenceSymbolCount(best?.segment) : 0;
       setLowConfidenceIndices(Array.from({ length: lowCount }, (_, i) => i));
 
-      if (!editedWhileProcessingRef.current) {
-        setRecognizedText(processedText);
-        // A confidence score is meaningless when nothing was read.
-        setConfidence(processedText && confidenceKnown ? best?.confidence ?? null : null);
+      // Cross-checks run only when remote keys are configured. Without them
+      // remotes is empty, merge keeps the local text and nothing else changes.
+      const localQuality = !processedText
+        ? ('missing' as const)
+        : evaluatesCleanly(processedText)
+          ? ('parses' as const)
+          : ('empty' as const);
+      let finalText = processedText;
+      let merged: CrossCheckOutcome = { expression: processedText, source: 'local', hasSuggestion: false };
+      if (ocrSpaceKeyRef.current || geminiKeyRef.current) {
+        setCrossCheckSummary('Cross-checking with remote engines…');
+        let remotes: RemoteRead[] = [];
+        try {
+          remotes = await runCrossChecks(preprocessedCanvas, processedText);
+        } catch {
+          remotes = [];
+        }
+        merged = mergeCrossChecks(localQuality, processedText, remotes);
+        finalText = merged.expression;
+        setCrossCheckSummary(summarizeCrossChecks(processedText, remotes, merged));
       }
 
-      if (!processedText) {
+      if (!editedWhileProcessingRef.current) {
+        setRecognizedText(finalText);
+        // A confidence score is meaningless when nothing was read, and a
+        // remote-sourced text has no local confidence information at all.
+        setConfidence(
+          finalText && finalText === processedText && confidenceKnown ? best?.confidence ?? null : null
+        );
+      }
+
+      if (!finalText) {
         setError(
           'Nothing readable was found. The scanner engine has been reloaded — press Recognize Text to try again, crop closer to the expression, or type it below.'
         );
@@ -446,6 +615,7 @@ export function ScanCalculator() {
     setError(null);
     setLowConfidenceIndices([]);
     setHasScanned(false);
+    setCrossCheckSummary(null);
   };
 
   const handleReset = () => {
@@ -457,6 +627,7 @@ export function ScanCalculator() {
     setBlurWarning(false);
     setLowConfidenceIndices([]);
     setHasScanned(false);
+    setCrossCheckSummary(null);
   };
 
   return (
@@ -582,6 +753,11 @@ export function ScanCalculator() {
               <p id="recognized-expression-hint" className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 Tap the box to correct a misread digit before solving.
               </p>
+              {crossCheckSummary && (
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
+                  {crossCheckSummary}
+                </p>
+              )}
               {confidence !== null && (
                 <div className="mt-1 sm:mt-2 text-xs sm:text-sm">
                   <span className={`font-medium ${confidence < 70 ? 'text-yellow-600 dark:text-yellow-400' : 'text-green-600 dark:text-green-400'}`}>
@@ -627,6 +803,70 @@ export function ScanCalculator() {
             <p className="text-red-700 dark:text-red-400 text-xs sm:text-sm">{error}</p>
           </div>
         )}
+
+        {/* Remote OCR API Keys (optional engines) */}
+        <details className="mb-4 sm:mb-6" open={apiSettingsOpen} onToggle={(e) => setApiSettingsOpen((e.target as HTMLDetailsElement).open)}>
+          <summary className="cursor-pointer text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300">
+            ⚙️ Remote OCR APIs (optional)
+          </summary>
+          <div className="mt-2 space-y-2 p-3 bg-gray-50 dark:bg-gray-900/40 rounded-lg text-xs sm:text-sm">
+            <p className="text-gray-500 dark:text-gray-400">
+              Optional second opinions for the scanner. The local engine always runs first and
+              keys are stored only in this browser — leave empty to skip the remote calls.
+            </p>
+            <label className="block">
+              <span className="block text-gray-600 dark:text-gray-300 mb-1">OCR.space API key (free at ocr.space)</span>
+              <input
+                type="password"
+                value={ocrSpaceKeyInput}
+                onChange={(e) => setOcrSpaceKeyInput(e.target.value)}
+                className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono"
+                autoComplete="off"
+                data-testid="ocrspace-key"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-gray-600 dark:text-gray-300 mb-1">Gemini API key (AI Studio)</span>
+              <input
+                type="password"
+                value={geminiKeyInput}
+                onChange={(e) => setGeminiKeyInput(e.target.value)}
+                className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono"
+                autoComplete="off"
+                data-testid="gemini-key"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-gray-600 dark:text-gray-300 mb-1">Gemini model</span>
+              <input
+                type="text"
+                value={geminiModelInput}
+                onChange={(e) => setGeminiModelInput(e.target.value)}
+                className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono"
+                autoComplete="off"
+                data-testid="gemini-model"
+              />
+            </label>
+            <button
+              onClick={() => {
+                persistOcrSpaceKey(ocrSpaceKeyInput);
+                ocrSpaceKeyRef.current = ocrSpaceKeyInput.trim();
+                persistGeminiKey(geminiKeyInput);
+                geminiKeyRef.current = geminiKeyInput.trim();
+                persistGeminiModel(geminiModelInput);
+                geminiModelRef.current = geminiModelInput.trim();
+                setCrossCheckSummary(
+                  ocrSpaceKeyRef.current || geminiKeyRef.current
+                    ? 'Remote engines saved — next scans include a cross-check.'
+                    : 'No remote keys saved — scans use the local engine only.'
+                );
+              }}
+              className="px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+            >
+              Save engines
+            </button>
+          </div>
+        </details>
 
         {/* Offline Message */}
         <div className="mt-4 sm:mt-6 p-3 sm:p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">

@@ -2,6 +2,12 @@
 import { test, expect } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  readEquationOcrSpace,
+} from '../apps/web/src/features/scan/ocrSpace';
+import {
+  adjudicateExpression,
+} from '../apps/web/src/features/scan/geminiOCR';
 
 /**
  * OCR accuracy harness.
@@ -12,8 +18,19 @@ import { join } from 'node:path';
  * and compares what the app puts in the edit box with the expected expression.
  *
  * The report is written to test-results/ocr-report.json so accuracy changes can
- * be compared across runs.
+ * be compared across runs, plus equations_test_log.csv in the cross-engine log
+ * format from the "End-to-End Basic Math OCR Implementation Guide".
+ *
+ * Optional cross-engine columns are filled only when a key is present in the
+ * environment (OCRSPACE_API_KEY / GEMINI_API_KEY); the headers stay in the CSV
+ * either way so runs with and without keys stay diffable.
  */
+
+const OCR_SPACE_KEY = process.env.OCRSPACE_API_KEY ?? '';
+const GEMINI_KEY = process.env.GEMINI_API_KEY ?? '';
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
+
+const csvEscape = (value: string) => '"' + String(value).replace(/"/g, '""') + '"';
 
 interface CaseSpec {
   name: string;
@@ -209,6 +226,8 @@ test.describe('Scan tab OCR accuracy', () => {
       actual: string;
       pass: boolean;
       knownLimitation?: string;
+      ocrSpaceOutput?: string;
+      geminiOutput?: string;
     }> = [];
     for (const spec of CASES) {
       const dataUrl = await renderCase(page, spec);
@@ -220,12 +239,36 @@ test.describe('Scan tab OCR accuracy', () => {
       }
       // Spacing is presentation: mathjs accepts "2 + 3" and "2+3" alike.
       const normalize = (value: string) => value.replace(/\s+/g, '');
+
+      // Optional cross-engine readings of the SAME image (opt-in via keys).
+      let ocrSpaceOutput = '';
+      if (OCR_SPACE_KEY) {
+        const remote = await readEquationOcrSpace(OCR_SPACE_KEY, dataUrl).catch(() => null);
+        ocrSpaceOutput = remote?.text ?? '';
+      }
+      let geminiOutput = '';
+      if (GEMINI_KEY) {
+        const candidates = [
+          { engine: 'tesseract', text: actual || '(nothing read)' },
+          ...(ocrSpaceOutput ? [{ engine: 'ocrspace', text: ocrSpaceOutput }] : []),
+        ];
+        const verdict = await adjudicateExpression(candidates, {
+          apiKey: GEMINI_KEY,
+          model: GEMINI_MODEL,
+          imageBase64: dataUrl.split(',')[1],
+          imageMimeType: dataUrl.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png',
+        }).catch(() => null);
+        geminiOutput = verdict?.expression ?? '';
+      }
+
       rows.push({
         case: spec.name,
         expected: spec.expected,
         actual,
         pass: normalize(actual) === normalize(spec.expected),
         knownLimitation: spec.knownLimitation,
+        ocrSpaceOutput,
+        geminiOutput,
       });
       // Reset between images so a stale expression cannot mask a failure
       await page.getByRole('button', { name: /Clear image/i }).click();
@@ -243,6 +286,26 @@ test.describe('Scan tab OCR accuracy', () => {
     const outDir = join(process.cwd(), 'test-results');
     mkdirSync(outDir, { recursive: true });
     writeFileSync(join(outDir, 'ocr-report.json'), JSON.stringify(report, null, 2));
+    // equations_test_log.csv — the cross-engine log from the implementation
+    // guide (image_filename,expected_equation,tesseract_output,ocr_space_output,
+    // status) plus our gemini_output extension column.
+    const csv = [
+      'image_filename,expected_equation,tesseract_output,ocr_space_output,gemini_output,status',
+      ...rows.map(
+        (r) =>
+          [
+            r.case + '.png',
+            r.expected,
+            r.actual,
+            r.ocrSpaceOutput,
+            r.geminiOutput,
+            r.knownLimitation ? 'LIMIT (engine limitation)' : r.pass ? 'PASS' : 'FAIL',
+          ]
+            .map(csvEscape)
+            .join(',')
+      ),
+    ].join('\n');
+    writeFileSync(join(outDir, 'equations_test_log.csv'), csv + '\n');
 
     const table = rows
       .map((r) => {
