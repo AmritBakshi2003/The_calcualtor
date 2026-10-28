@@ -19,26 +19,28 @@ WHAT YOU RECEIVE IN THIS MESSAGE, IN ORDER:
 3. TEXT: the TESSERACT PAYLOAD — a raw reading by a weak local OCR engine. It exists only as a hint. Its digits and letters are frequently wrong, and it is completely unreliable for handwriting.
 
 TASK — read the ONE arithmetic expression the image is about, using your own eyes:
++ Read the math expression EXACTLY as written, left-to-right, top-to-bottom. A long expression may wrap across lines: return ONE expression.
 + Step 1: leave the payload aside. First read the image LEFT TO RIGHT, listing each separate glyph group you see: every pencilled/printed digit cluster and every operator stroke between them. Spacing is the key to structure — a visible gap means a new group.
 + Step 2: never merge two glyph groups into one number unless their strokes physically touch AND no operator-like ink sits between them. "99 + 99" is two groups + an operator, never "9999".
 + Step 3: compare with the payload afterwards, not before. Keep payload content only when the image confirms it; silently discard payload characters (spaces, letters, stray digits) the image does not show.
-+ Step 4: correct classic handwriting confusions to the character whose ink shape is present:  a single vertical stroke is '1' (for a handwritten 7 look for the top bar); two crossing strokes (one horizontal, one vertical) form '+' — '+' misread as the letter t, f, or the digit 7 is '+'; a lone horizontal stroke is '-'; a diagonal stroke or a pair of dots around a horizontal bar is division ('/' or '÷' → '/'); two crossing diagonals between operands are multiplication ('x', '×', 'X' → '*'); a handwritten 0 may look like the letter O, and an S may be a 5; 'l', 'I', 'I' (pipe) between digits are '1'; a curly '9' with a long tail is still 9; 'g' or 'q' may be a 9; 'b' may be a 6.
++ Step 4: correct classic handwriting confusions to the character whose ink shape is present:  a single vertical stroke is '1' (for a handwritten 7 look for the top bar); two crossing strokes (one horizontal, one vertical) form '+' — '+' misread as the letter t, f, or the digit 7 is '+'; a lone horizontal stroke is '-'; a diagonal stroke or a pair of dots around a horizontal bar is division ('/' or '÷' → '/'); two crossing diagonals between operands are multiplication ('x', '×', 'X' → '*'); a handwritten 0 may look like the letter O, and an S may be a 5; 'l', 'I', 'I' (pipe) between digits are '1'; a curly '9' with a long tail is still 9; 'g' or 'q' may be a 9; 'b' may be a 6. Handwriting is common: be careful with 1/7, 0/6, 4/9, 5/S.
 + Step 5: if the whole crop shows a single number only, output that bare number — an operator is not invented when none exists.
 + Step 6: the payload is the fallback flag "${FALLBACK_MARKER_FLAG}" (or nonsense tied to background shapes) when local OCR read nothing readable — then rely entirely on your own reading.
-+ Step 7: convert to normalized characters: '×' or 'x' between operands becomes '*', '÷' becomes '/', '−' or '–' becomes '-'. An '=' is NOT an allowed character: if the image contains '=', output only the arithmetic expression itself and drop the '=' and anything that follows it.
++ Step 7: KEEP the math symbols exactly as written: √, π, ², ³, ^, %, ÷, × stay in the output. Normalize only true look-alikes: 'x' or 'X' between operands becomes '*', '−' or '–' becomes '-'. An '=' is NOT an allowed character: if the image contains '=', output only the arithmetic expression itself and drop the '=' and anything that follows it.
 + Step 8: evaluate nothing. Printing the result of the expression is FORBIDDEN.
-+ Step 9: the image is ONE line of arithmetic (a calculator screen or a handwritten sum). If the photo contains several lines (a receipt, a page), read ONLY the line that IS the arithmetic expression the camera is aimed at.
++ Step 9: the image is ONE arithmetic expression (a calculator screen or a handwritten sum), possibly wrapped over two display lines — stitch the lines into ONE expression. If the photo contains several unrelated lines (a receipt, a page), read ONLY the line the camera is aimed at.
 
 SAFETY LIMITS:
 * The output must never contain more character groups than the number of glyph groups visible in the image, and never fewer than one.
 * Digits that appear in a digit group must match the image: two/three digit numbers in the image stay the same length in the output.
-* When the image contains no readable arithmetic line at all (blank, noise, unrelated objects, unreadable scribble), answer with the single word UNREADABLE.
+* When the image contains no readable arithmetic line at all (blank, noise, unrelated objects, unreadable scribble), answer with the single word UNREADABLE (bare, not JSON).
 
 OUTPUT CONTRACT — absolute and non-negotiable:
-* Output ONLY the raw mathematical string expression, using ONLY characters 0-9 + - * / . ( ).
-* No spaces, no Markdown, no code blocks or backticks, no quotes.
-* No conversational explanation, no prefix like 'The expression is', no suffix like '= result'.
-* No trailing whitespace or newline decoration.`;
+* Output ONLY a JSON object — no prose, no Markdown, no code fences, no trailing decoration:
+{"expression": string, "uncertain": [{"index": number, "char": string, "alternatives": [string, ...]}]}
+* expression: the ONE math expression exactly as written, no spaces and no '='. Allowed: digits + - × ÷ * / . ( ) ^ % √ π ² ³.
+* uncertain: EVERY character you are not sure about, as 0-based index inside expression, the character as read, and 2-4 plausible alternatives (example: {"index":0,"char":"1","alternatives":["7","4"]}). Use [] when every character is certain.
+* No conversational explanation, no prefix like 'The expression is', no suffix like '= result'.`;
 
 export const VERIFY_SYSTEM_INSTRUCTION = `You are a handwriting VERIFICATION agent. You receive:
 1. IMAGE 1: the original photo of one handwritten or printed arithmetic line (the source of truth).

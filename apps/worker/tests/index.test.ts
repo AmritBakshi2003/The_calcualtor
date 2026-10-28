@@ -200,6 +200,30 @@ describe('POST /api/scan/recognize', () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ error: 'gemini_not_configured' });
   });
+
+  it('passes the model\'s uncertain flags through the two-pass flow (step 5)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        geminiJson(
+          JSON.stringify({
+            expression: '6×7',
+            uncertain: [{ index: 1, char: '×', alternatives: ['*', '7'] }],
+          })
+        )
+      )
+    );
+    const response = await post('/api/scan/recognize', {
+      image: IMAGE,
+      mime: 'image/png',
+      hint: null,
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.expression).toBe('6×7');
+    expect(body.verified).toBe(true); // second pass echoed the same answer
+    expect(body.uncertain).toEqual([{ index: 1, char: '×', alternatives: ['*', '7'] }]);
+  });
 });
 
 describe('POST /api/solve/complex', () => {

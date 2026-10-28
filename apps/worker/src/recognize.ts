@@ -45,7 +45,24 @@ export interface RecognizeResult {
   unreadable: boolean;
   /** True only when a second model pass confirmed the expression against the ink. */
   verified?: boolean;
+  /**
+   * Characters the model flagged as uncertain (step-5 JSON contract):
+   * its index inside `expression`, the character as read, and plausible
+   * alternatives. Present only when the model reported doubt.
+   */
+  uncertain?: UncertainChar[];
 }
+
+/** One uncertain character from the model's JSON answer. */
+export interface UncertainChar {
+  index: number;
+  char: string;
+  alternatives: string[];
+}
+
+/** Caps that keep a hostile/rambling model answer bounded. */
+const MAX_UNCERTAIN_ENTRIES = 12;
+const MAX_ALTERNATIVES_PER_ENTRY = 5;
 
 /**
  * Same validation as the primary image, minus the mandatory-field checks.
@@ -136,16 +153,93 @@ export function unwrapRecognitionText(text: string): string {
 }
 
 /**
- * Step-5 structural regex, shared with the Python pipeline: only
- * `0-9 + - * / . ( )` survive. Returns the compact expression or ''.
+ * Step-5 structural regex, shared with the Python pipeline: prose and junk
+ * fall away, the math alphabet survives. Kept set covers digits, ASCII
+ * operators, the display symbols (√ π ² ³ ^ % × ÷) and brackets; the
+ * dash look-alikes map onto '-' first so "−" never vanishes mid-expression.
+ * Returns the compact expression or ''.
  */
 export function structuralMatch(text: string): string {
-  const compact = text.replace(/[^0-9+\-*/.()]/g, '');
+  const compact = text
+    .replace(/[−–—]/g, '-')
+    .replace(/[^0-9+\-×÷*/.()^%√π²³]/g, '');
   // A bare number or garbage-in-the-operators-only string is not an
   // expression the scanner is useful for: require at least one digit and,
   // when any operator survived, at least two operands' worth of digits.
   if (!/[0-9]/.test(compact)) return '';
   return compact;
+}
+
+/**
+ * Validate the model's `uncertain` array: entries need an integer index >= 0,
+ * a non-empty character and at least one alternative; junk entries drop out.
+ * Pure — the model is never trusted with the response shape.
+ */
+export function parseUncertain(value: unknown): UncertainChar[] {
+  if (!Array.isArray(value)) return [];
+  const entries: UncertainChar[] = [];
+  for (const raw of value) {
+    if (entries.length >= MAX_UNCERTAIN_ENTRIES) break;
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
+    const record = raw as Record<string, unknown>;
+    if (typeof record.index !== 'number' || !Number.isInteger(record.index) || record.index < 0) {
+      continue;
+    }
+    if (typeof record.char !== 'string' || record.char.length === 0) continue;
+    const alternatives = Array.isArray(record.alternatives)
+      ? record.alternatives
+          .filter(
+            (item): item is string => typeof item === 'string' && item.trim().length > 0
+          )
+          .slice(0, MAX_ALTERNATIVES_PER_ENTRY)
+      : [];
+    if (alternatives.length === 0) continue;
+    entries.push({ index: record.index, char: record.char, alternatives });
+  }
+  return entries;
+}
+
+/**
+ * Parse one model answer under the step-5 contract: a JSON object
+ * `{expression, uncertain}`. Defensive: a bare legacy string expression is
+ * still accepted (the verify pass and older models answer that way), a
+ * fenced JSON blob unwraps, and UNREADABLE anywhere collapses to unreadable.
+ */
+function parseRecognitionAnswer(text: string): {
+  expression: string;
+  uncertain: UncertainChar[];
+  unreadable: boolean;
+} {
+  const unwrapped = unwrapRecognitionText(text);
+  if (!unwrapped) {
+    return { expression: '', uncertain: [], unreadable: true };
+  }
+
+  const start = unwrapped.indexOf('{');
+  const end = unwrapped.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(unwrapped.slice(start, end + 1)) as unknown;
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        const record = parsed as Record<string, unknown>;
+        if (typeof record.expression === 'string') {
+          const inner = unwrapRecognitionText(record.expression);
+          if (!inner || inner.toUpperCase().includes('UNREADABLE')) {
+            return { expression: '', uncertain: [], unreadable: true };
+          }
+          return {
+            expression: structuralMatch(inner),
+            uncertain: parseUncertain(record.uncertain),
+            unreadable: false,
+          };
+        }
+      }
+    } catch {
+      // Not usable JSON: fall through to the bare-string interpretation.
+    }
+  }
+
+  return { expression: structuralMatch(unwrapped), uncertain: [], unreadable: false };
 }
 
 /**
@@ -163,13 +257,17 @@ export function mergedDigitsSuspect(hint: string | null, expression: string): bo
 }
 
 export function buildRecognizeResult(modelText: string): RecognizeResult {
-  const unwrapped = unwrapRecognitionText(modelText);
-  if (!unwrapped) {
+  const parsed = parseRecognitionAnswer(modelText);
+  if (parsed.unreadable) {
     return { expression: '', source: 'gemini', unreadable: true };
   }
-  const expression = structuralMatch(unwrapped);
-  if (!expression) {
+  if (!parsed.expression) {
     throw new ApiError(502, 'NO_MATH_CONTENT', 'Gemini returned no structural math content.');
   }
-  return { expression, source: 'gemini', unreadable: false };
+  return {
+    expression: parsed.expression,
+    source: 'gemini',
+    unreadable: false,
+    ...(parsed.uncertain.length > 0 ? { uncertain: parsed.uncertain } : {}),
+  };
 }

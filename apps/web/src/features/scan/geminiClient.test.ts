@@ -98,6 +98,26 @@ describe('recognizeWithGemini', () => {
     await expect(recognizeWithGemini(PNG_1PX, null)).rejects.toBeInstanceOf(GeminiUnavailableError);
   });
 
+  it('parses the model\'s uncertain flags (step 5 JSON contract)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse(200, {
+          expression: '√(16)',
+          unreadable: false,
+          verified: true,
+          uncertain: [
+            { index: 0, char: '√', alternatives: ['V', '4'] }, // valid
+            { index: -1, char: 'x', alternatives: ['y'] }, // dropped: bad index
+            { index: 2, char: '1', alternatives: [] }, // dropped: no alternatives
+          ],
+        })
+      )
+    );
+    const result = await recognizeWithGemini(PNG_1PX, null);
+    expect(result.uncertain).toEqual([{ index: 0, char: '√', alternatives: ['V', '4'] }]);
+  });
+
   it('rejects HTML fallback responses (Worker not running)', async () => {
     vi.stubGlobal('fetch', async () => jsonResponse(200, '<html>index</html>'));
     await expect(recognizeWithGemini(PNG_1PX, null)).rejects.toMatchObject({

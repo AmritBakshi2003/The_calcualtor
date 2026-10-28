@@ -170,12 +170,14 @@ async function handleRecognize(request: Request, env: WorkerEnv): Promise<Respon
       // Same principle: keep the candidate, mark it unverified.
       return jsonResponse(200, { ...first, verified: false });
     }
+    // The verify pass answers with the bare-string contract (no `uncertain`),
+    // so pass 1's flagged characters ride along with the final answer.
     if (verified.expression === first.expression) {
-      return jsonResponse(200, { ...verified, verified: true });
+      return jsonResponse(200, { ...verified, verified: true, uncertain: first.uncertain });
     }
     // Pass 2 corrected pass 1 (or vice versa): the corrected reading is
     // itself an independent ink-backed read, so it ships verified.
-    return jsonResponse(200, { ...verified, verified: true });
+    return jsonResponse(200, { ...verified, verified: true, uncertain: first.uncertain });
   } catch {
     // Pass 2 is an accuracy gate, not a hard dependency: when it fails
     // (rate limit, timeout) fall back to pass 1 but run the merged-digits

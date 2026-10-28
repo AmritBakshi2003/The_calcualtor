@@ -20,6 +20,47 @@ export interface GeminiRecognition {
   unreadable: boolean;
   /** True only when a second server-side pass confirmed the reading against the ink. */
   verified: boolean;
+  /**
+   * Characters the model flagged in its step-5 JSON answer: its index in
+   * `expression`, the char as read, and plausible alternatives. Only present
+   * when the model reported doubt; validated here before use.
+   */
+  uncertain?: UncertainChar[];
+}
+
+/** One uncertain character from the worker's recognize response. */
+export interface UncertainChar {
+  index: number;
+  char: string;
+  alternatives: string[];
+}
+
+/**
+ * Validate the worker's `uncertain` array (the model is never trusted with
+ * the shape): integer index >= 0, non-empty char, non-empty alternatives.
+ */
+function parseUncertain(value: unknown): UncertainChar[] {
+  if (!Array.isArray(value)) return [];
+  const entries: UncertainChar[] = [];
+  for (const raw of value) {
+    if (entries.length >= 12) break;
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
+    const record = raw as Record<string, unknown>;
+    if (typeof record.index !== 'number' || !Number.isInteger(record.index) || record.index < 0) {
+      continue;
+    }
+    if (typeof record.char !== 'string' || record.char.length === 0) continue;
+    const alternatives = Array.isArray(record.alternatives)
+      ? record.alternatives
+          .filter(
+            (item): item is string => typeof item === 'string' && item.trim().length > 0
+          )
+          .slice(0, 5)
+      : [];
+    if (alternatives.length === 0) continue;
+    entries.push({ index: record.index, char: record.char, alternatives });
+  }
+  return entries;
 }
 
 export class GeminiUnavailableError extends Error {
@@ -192,7 +233,19 @@ export async function recognizeWithGemini(
   if (!expression && !unreadable) {
     throw new GeminiUnavailableError('bad_response', response.status, 'Gemini returned no expression.');
   }
-  return { expression, unreadable, verified: payload.verified === true };
+  const uncertain = parseUncertain(payload.uncertain);
+  // The live scan flow (Tesseract -> OCR.space -> consensus) does not call
+  // this route yet, so there is nothing to render `uncertain` in — keep it
+  // visible in devtools instead of dropping the model's own doubt report.
+  if (uncertain.length > 0) {
+    console.debug('[scan] Gemini flagged uncertain characters:', uncertain);
+  }
+  return {
+    expression,
+    unreadable,
+    verified: payload.verified === true,
+    ...(uncertain.length > 0 ? { uncertain } : {}),
+  };
 }
 
 /** Solve a question the local engines declined; null answer = undecidable. */
