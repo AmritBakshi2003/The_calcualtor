@@ -173,6 +173,7 @@ export function ScanCalculator() {
     if (head === 'tesseract') return 'Tesseract';
     if (head === 'ocrspace') return 'OCR.space';
     if (head === 'gemini') return 'Gemini';
+    if (source === 'local-only') return 'Local only';
     return source;
   };
 

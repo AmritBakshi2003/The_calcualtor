@@ -64,6 +64,12 @@ export type Decision = {
   topCandidates: RankedCandidate[];
   /** Dropped symbols behind `expression` (same group as sources). */
   dropped: string[];
+  /**
+   * True when every source agreeing on `expression` is a Tesseract variant.
+   * Honest agreement, NOT verification (step 3): the arbiter must confirm
+   * the reading before it can ship verified:true.
+   */
+  localConsensus: boolean;
 };
 
 function clampConfidence(value: unknown): number {
@@ -132,16 +138,32 @@ export function rankCandidates(candidates: ConsensusCandidate[]): RankedCandidat
 }
 
 /**
+ * True when a source label is one of the LOCAL Tesseract variants (the
+ * browser sends "tesseract:<variant>-psm<psm>"). Tesseract variants share
+ * one engine family: two variants agreeing is far weaker than two
+ * independent engines agreeing, so it must never count as verification on
+ * its own.
+ */
+function isTesseractSource(source: string): boolean {
+  return source.startsWith('tesseract:');
+}
+
+/**
  * The Phase-3 decision rule, pure and offline:
  *  - consensus: some normalized expression was read by >= 2 DIFFERENT
- *    sources (engines or variants); ties between qualifying groups go to
- *    more sources, then higher confidence, then first appearance;
- *  - needs_arbiter: no such agreement — the top 3 distinct readings travel
- *    to the arbiter instead.
+ *    sources, at least one of which is NOT a Tesseract variant (a second
+ *    engine, e.g. OCR.space) — ties between qualifying groups go to more
+ *    sources, then higher confidence, then first appearance;
+ *  - needs_arbiter: no such cross-engine agreement — the top 3 distinct
+ *    readings travel to the arbiter instead. A Tesseract-only agreement
+ *    still points the arbiter at the agreed reading (localConsensus) so the
+ *    arbiter can confirm or refute the best local guess.
  */
 export function decide(candidates: ConsensusCandidate[]): Decision {
   const ranked = rankCandidates(candidates);
-  const winner = ranked.find((group) => group.sources.length >= 2);
+  const winner = ranked.find(
+    (group) => group.sources.length >= 2 && group.sources.some((source) => !isTesseractSource(source))
+  );
 
   if (winner) {
     return {
@@ -151,6 +173,22 @@ export function decide(candidates: ConsensusCandidate[]): Decision {
       alternatives: ranked.filter((g) => g !== winner).slice(0, 3).map((g) => g.expression),
       topCandidates: ranked.slice(0, 3),
       dropped: winner.dropped,
+      localConsensus: false,
+    };
+  }
+
+  // A >= 2-source group that is ALL Tesseract variants is an honest
+  // candidate, not a verification: it drives the arbiter's focus.
+  const agreedGroup = ranked.find((group) => group.sources.length >= 2);
+  if (agreedGroup) {
+    return {
+      outcome: 'needs_arbiter',
+      expression: agreedGroup.expression,
+      sources: agreedGroup.sources,
+      alternatives: ranked.filter((g) => g !== agreedGroup).slice(0, 3).map((g) => g.expression),
+      topCandidates: ranked.slice(0, 3),
+      dropped: agreedGroup.dropped,
+      localConsensus: true,
     };
   }
 
@@ -162,6 +200,7 @@ export function decide(candidates: ConsensusCandidate[]): Decision {
     alternatives: ranked.slice(1, 4).map((g) => g.expression),
     topCandidates: ranked.slice(0, 3),
     dropped: best ? best.dropped : [],
+    localConsensus: false,
   };
 }
 
@@ -359,6 +398,8 @@ export async function handleConsensusBody(
 
   const decision = decide(parsed.candidates);
   const stages: string[] = [`decide:${decision.outcome}`];
+  // Honest trace: a Tesseract-only agreement went to the arbiter anyway.
+  if (decision.localConsensus) stages.push('decide:consensus:local_only');
 
   const result: ConsensusResult =
     decision.outcome === 'consensus'
@@ -649,7 +690,9 @@ function arbiterFallback(decision: Decision, stages: string[]): ConsensusResult 
   return {
     expression: best?.expression ?? '',
     verified: false,
-    sources: best ? best.sources : [],
+    // Honest labeling: whatever shipped here was NOT cross-checked by
+    // Gemini, so "local-only" always travels with the engine list.
+    sources: best ? [...best.sources, 'local-only'] : ['local-only'],
     alternatives: decision.topCandidates.slice(1, 4).map((c) => c.expression),
     stages,
   };

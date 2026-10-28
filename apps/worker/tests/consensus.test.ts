@@ -101,15 +101,26 @@ describe('decide (pure)', () => {
     expect(result.expression).toBe('2+3');
   });
 
-  it('counts different variant labels as different sources', () => {
+  it('Tesseract variants agreeing is honest agreement, but NOT verification (step 3)', () => {
     const result = decide([
       { expression: '2+3', source: 'tesseract:grayscale-psm7' },
       { expression: '2+3', source: 'tesseract:grayscale-psm13' },
     ]);
-    expect(result.outcome).toBe('consensus');
+    expect(result.outcome).toBe('needs_arbiter'); // one engine family is not consensus
+    expect(result.localConsensus).toBe(true);
+    expect(result.expression).toBe('2+3'); // the agreement still drives the arbiter
   });
 
-  it('ranks consensus by distinct sources, then confidence', () => {
+  it('cross-engine consensus (Tesseract + OCR.space) still verifies without Gemini', () => {
+    const result = decide([
+      { expression: '12+34', source: 'tesseract:a', confidence: 55 },
+      { expression: '12+34', source: 'ocrspace', confidence: 70 },
+    ]);
+    expect(result.outcome).toBe('consensus');
+    expect(result.localConsensus).toBe(false);
+  });
+
+  it('ranks cross-engine consensus by distinct sources, then confidence', () => {
     const result = decide([
       { expression: '2++3', source: 'tesseract:a' }, // junk: normalize rejects
       { expression: '12+34', source: 'tesseract:b', confidence: 40 },
@@ -117,10 +128,22 @@ describe('decide (pure)', () => {
       { expression: '9÷2', source: 'ocrspace', confidence: 70 },
       { expression: '144/12', source: 'tesseract:d', confidence: 30 },
     ]);
-    // 12+34 has two distinct sources -> consensus over the confident 9÷2.
-    expect(result.outcome).toBe('consensus');
+    // 12+34 now only has Tesseract sources -> needs_arbiter (local consensus);
+    // the agreed reading still tops the ranking for the arbiter.
+    expect(result.outcome).toBe('needs_arbiter');
+    expect(result.localConsensus).toBe(true);
     expect(result.expression).toBe('12+34');
     expect(result.alternatives).toEqual(['9÷2', '144/12']);
+  });
+
+  it('ranks cross-engine consensus when a second engine backs the agreement', () => {
+    const result = decide([
+      { expression: '12+34', source: 'tesseract:b', confidence: 40 },
+      { expression: '144/12', source: 'tesseract:d', confidence: 30 },
+      { expression: '12+34', source: 'ocrspace', confidence: 70 },
+    ]);
+    expect(result.outcome).toBe('consensus');
+    expect(result.expression).toBe('12+34');
   });
 
   it('needs_arbiter when no expression has two distinct sources, with the top 3', () => {
@@ -417,6 +440,68 @@ describe('POST /api/scan/consensus', () => {
     expect(body.expression).toBe('√(4556+546)-8562');
     expect(body.verified).toBe(true); // nothing was dropped
     expect(body.dropped).toBeUndefined();
+  });
+
+  it('Tesseract-only agreement: the arbiter ALWAYS runs and confirms', async () => {
+    const fetchMock = makeFetchMock();
+    fetchMock.mockResolvedValue(geminiJson(arbiterAnswerJson('2+3')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await post(
+      consensusBody([
+        { expression: '2+3', source: 'tesseract:grayscale-psm7', confidence: 55 },
+        { expression: '2+3', source: 'tesseract:grayscale-psm13', confidence: 48 },
+      ]),
+      makeEnv({ kv: makeKv() })
+    );
+
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.stages).toContain('decide:consensus:local_only');
+    expect(fetchMock).toHaveBeenCalledTimes(1); // before step 3 this was ZERO
+    expect((String(fetchMock.mock.calls[0]?.[0]))).toContain(`${ARBITER_PRIMARY_MODEL}:generateContent`);
+    expect(body.verified).toBe(true);
+    expect((body.sources as string[]).join(' ')).toContain('gemini:');
+  });
+
+  it('Tesseract-only agreement: when Gemini disagrees, its reading ships unverified', async () => {
+    // Two Tesseract reads "6×7"; the primary model says "6×9" (no match),
+    // and the second model agrees with Gemini over the local consensus.
+    // A fresh Response per call: a Response body can be read only once.
+    const fetchMock = makeFetchMock();
+    fetchMock.mockImplementation(async () => geminiJson(arbiterAnswerJson('6×9')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await post(
+      consensusBody([
+        { expression: '6×7', source: 'tesseract:grayscale-psm7', confidence: 60 },
+        { expression: '6×7', source: 'tesseract:grayscale-psm13', confidence: 52 },
+      ]),
+      makeEnv({ kv: makeKv() })
+    );
+
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.expression).toBe('6×9'); // Gemini's own reading
+    expect(body.verified).toBe(false);
+    expect(body.alternatives).toContain('6×7'); // local readings stay visible
+  });
+
+  it('Tesseract-only agreement without a Gemini key: local reading, source local-only', async () => {
+    const fetchMock = makeFetchMock();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await post(
+      consensusBody([
+        { expression: '2+3', source: 'tesseract:grayscale-psm7', confidence: 55 },
+        { expression: '2+3', source: 'tesseract:grayscale-psm13', confidence: 48 },
+      ]),
+      makeEnv({ kv: makeKv(), geminiKey: '' })
+    );
+
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.expression).toBe('2+3'); // the local reading ships
+    expect(body.verified).toBe(false); // but it was NOT cross-checked
+    expect(body.stages).toContain('arbiter:skipped:not_configured');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('validates the candidate array strictly', async () => {
