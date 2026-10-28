@@ -1,7 +1,7 @@
 import { useCalculator } from './useCalculator';
 import { useCalculatorStore } from '../../store';
 import { ScientificSection } from './ScientificSection';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { BackspaceIcon } from '../../components/BackspaceIcon';
 import { formatExpressionForDisplay } from './displayFormat';
 
@@ -146,13 +146,27 @@ export function SimpleCalculator() {
     appendToExpression,
     clear,
     backspace,
+    loadExpression,
     evaluate,
+    memoryRecall,
+    memoryClear,
+    memoryAdd,
+    memorySubtract,
     toggleSign,
     setResult,
     setError,
   } = useCalculator();
 
-  const { showScientific, setShowScientific, setShowHistoryPanel, angleMode, setAngleMode, showHistoryPanel } = useCalculatorStore();
+  const {
+    showScientific,
+    setShowScientific,
+    setShowHistoryPanel,
+    angleMode,
+    setAngleMode,
+    showHistoryPanel,
+    pendingExpression,
+    setPendingExpression,
+  } = useCalculatorStore();
 
   // Re-evaluate when angleMode changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -161,6 +175,34 @@ export function SimpleCalculator() {
       evaluate();
     }
   }, [angleMode]);
+
+  // History reuse: apply an entry queued by the history panel exactly once.
+  useEffect(() => {
+    if (!pendingExpression) return;
+    loadExpression(pendingExpression.expression, pendingExpression.result);
+    setPendingExpression(null);
+  }, [pendingExpression, loadExpression, setPendingExpression]);
+
+  // Copy-result state: "copied" flips the button label for two seconds.
+  const [copied, setCopied] = useState(false);
+  const handleCopyResult = useCallback(async () => {
+    if (!result) return;
+    const text = String(result).replace(/^Tip: /, '');
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard API is denied (http origins, older browsers): fall back.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
+  }, [result]);
+
   const [showUnitConverter, setShowUnitConverter] = useState(false);
   const [unitCategory, setUnitCategory] = useState('Length');
   const [unitFrom, setUnitFrom] = useState('m');
@@ -265,8 +307,18 @@ export function SimpleCalculator() {
               </div>
             )}
             {result && !error && (
-              <div className="text-xl sm:text-3xl font-bold text-gray-900 dark:text-white" aria-live="polite">
-                {result}
+              <div className="flex items-end justify-end gap-2">
+                <div className="text-xl sm:text-3xl font-bold text-gray-900 dark:text-white" aria-live="polite">
+                  {result}
+                </div>
+                <button
+                  onClick={handleCopyResult}
+                  className="shrink-0 p-1.5 text-sm rounded-lg bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors mb-1"
+                  aria-label={copied ? 'Result copied' : 'Copy result'}
+                  title={copied ? 'Copied!' : 'Copy result'}
+                >
+                  {copied ? '✓' : '📋'}
+                </button>
               </div>
             )}
             {!result && !error && !expression && (
@@ -275,7 +327,41 @@ export function SimpleCalculator() {
           </div>
         </div>
 
-        {/* Memory indicator */}
+        {/* Memory controls: MR / M+ / M− / MC row */}
+        <div className="mb-3 sm:mb-4 grid grid-cols-4 gap-1 sm:gap-2">
+          <button
+            onClick={memoryRecall}
+            className="p-2 sm:p-3 bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-xs sm:text-sm"
+            aria-label="Memory recall"
+            title="Recall memory (M+)"
+          >
+            MR
+          </button>
+          <button
+            onClick={() => void memoryAdd()}
+            className="p-2 sm:p-3 bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-xs sm:text-sm"
+            aria-label="Memory add"
+            title="Add current result to memory"
+          >
+            M+
+          </button>
+          <button
+            onClick={() => void memorySubtract()}
+            className="p-2 sm:p-3 bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-xs sm:text-sm"
+            aria-label="Memory subtract"
+            title="Subtract current expression from memory"
+          >
+            M−
+          </button>
+          <button
+            onClick={memoryClear}
+            className="p-2 sm:p-3 bg-gray-200 dark:bg-gray-600 text-gray-900 dark:text-white rounded-lg font-medium hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-xs sm:text-sm"
+            aria-label="Memory clear"
+            title="Clear memory"
+          >
+            MC
+          </button>
+        </div>
         {memory !== 0 && (
           <div className="mb-2 text-sm text-gray-500 dark:text-gray-400">
             M: {memory}

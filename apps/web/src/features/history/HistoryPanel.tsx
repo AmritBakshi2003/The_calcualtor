@@ -7,6 +7,7 @@ import {
   exportHistoryToCSV,
   HistoryEntry,
 } from '../../storage/db';
+import { formatExpressionForDisplay } from '../simple/displayFormat';
 
 interface HistoryPanelProps {
   isOpen: boolean;
@@ -35,15 +36,18 @@ export function HistoryPanel({ isOpen, onClose, onSelectEntry }: HistoryPanelPro
   }, [searchQuery, history]);
 
   const loadHistory = async () => {
-    const entries = await getHistory();
-    setHistory(entries.reverse()); // Show newest first
-    setFilteredHistory(entries.reverse());
+    // Newest first, sorted ONCE — the old double .reverse() flipped the list
+    // back to oldest-first before it was ever shown.
+    const entries = (await getHistory()).reverse();
+    setHistory(entries);
+    setFilteredHistory(entries);
   };
 
   const performSearch = async () => {
     if (searchQuery) {
       const results = await searchHistory(searchQuery);
-      setFilteredHistory(results.reverse());
+      // Match the main list's newest-first order.
+      setFilteredHistory(results.sort((a, b) => b.timestamp - a.timestamp));
     } else {
       setFilteredHistory(history);
     }
@@ -142,7 +146,7 @@ export function HistoryPanel({ isOpen, onClose, onSelectEntry }: HistoryPanelPro
                         {entry.mode.toUpperCase()} • {formatDate(entry.timestamp)}
                       </div>
                       <div className="font-mono text-gray-900 dark:text-white mb-1 text-sm">
-                        {entry.expression}
+                        {formatExpressionForDisplay(entry.expression)}
                       </div>
                       <div className="font-mono text-green-600 dark:text-green-400 font-medium text-sm">
                         = {entry.result}

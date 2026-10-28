@@ -8,7 +8,7 @@ interface LayoutProps {
 }
 
 export function Layout({ children }: LayoutProps) {
-  const { mode, setMode, theme, setTheme, showHistoryPanel, setShowHistoryPanel } = useCalculatorStore();
+  const { mode, setMode, theme, setTheme, showHistoryPanel, setShowHistoryPanel, setPendingExpression } = useCalculatorStore();
   const [isOnline, setIsOnline] = useState(true);
 
   useEffect(() => {
@@ -36,9 +36,13 @@ export function Layout({ children }: LayoutProps) {
     setTheme(theme === 'light' ? 'dark' : 'light');
   };
 
+  /**
+   * History reuse: queue the entry's expression for the calculator display and
+   * jump to the Simple tab, where Consumers apply it once.
+   */
   const handleHistorySelect = (entry: HistoryEntry) => {
-    // TODO: Load the expression into the appropriate calculator
-    console.log('Selected history entry:', entry);
+    if (mode !== 'simple') setMode('simple');
+    setPendingExpression({ expression: entry.expression, result: entry.result });
   };
 
   return (

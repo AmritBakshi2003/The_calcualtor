@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { evaluateExpression, EvaluateOptions } from '@calculator-suite/math-core';
 import { useCalculatorStore } from '../../store';
 import { addHistoryEntry } from '../../storage/db';
+import { appendSmart } from './smartAppend';
 
 export function useCalculator() {
   const { mode, angleMode, lastAnswer, setLastAnswer } = useCalculatorStore();
@@ -12,7 +13,7 @@ export function useCalculator() {
 
   const appendToExpression = useCallback((value: string) => {
     setError(null);
-    setExpression((prev) => prev + value);
+    setExpression((prev) => appendSmart(prev, value));
   }, []);
 
   const clear = useCallback(() => {
@@ -23,6 +24,13 @@ export function useCalculator() {
 
   const backspace = useCallback(() => {
     setExpression((prev) => prev.slice(0, -1));
+  }, []);
+
+  /** Load a full expression (history reuse); restoring a known result is optional. */
+  const loadExpression = useCallback((expr: string, initialResult?: string | null) => {
+    setExpression(expr);
+    setResult(initialResult ?? null);
+    setError(null);
   }, []);
 
   const evaluate = useCallback(async () => {
@@ -100,6 +108,20 @@ export function useCalculator() {
   // Keyboard support
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Never hijack typing in other controls (Tip %, Scan box, Finance fields).
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      // Let browser/app shortcuts through.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
       if (/[0-9.]/.test(e.key)) {
         appendToExpression(e.key);
       } else if (['+', '-', '*', '/', '%', '(', ')'].includes(e.key)) {
@@ -127,6 +149,7 @@ export function useCalculator() {
     appendToExpression,
     clear,
     backspace,
+    loadExpression,
     evaluate,
     memoryRecall,
     memoryClear,
