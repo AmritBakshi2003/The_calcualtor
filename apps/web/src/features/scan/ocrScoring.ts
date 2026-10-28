@@ -68,12 +68,17 @@ export const WHITELIST_CONFIDENCE_FALLBACK = 55;
 const DATE_LIKE = /^\s*\d{1,4}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,4}\s*$/;
 const CLOCK_LIKE = /^\s*\d{1,2}\s*[:.]\s*\d{2}\s*(?:[ap]m)?\s*$/i;
 
-/** Normalize the glyphs OCR commonly emits into the arithmetic we score. */
+/**
+ * Normalize the glyphs OCR commonly emits into the arithmetic we score.
+ * The multiplication middle dot ('·', printed on some calculators) is a
+ * look-alike of '×', not of a decimal point, so it maps to '*' as well.
+ */
 function normalizeForScoring(text: string): string {
   return text
     .replace(/[−–—]/g, '-')
-    .replace(/[×✕]/g, '*')
+    .replace(/[×✕·]/g, '*')
     .replace(/÷/g, '/')
+    .replace(/[∗⋅*]/g, '*')
     .replace(/([\d)])\s*[xX]\s*(?=[\d(.])/g, '$1*');
 }
 
@@ -145,7 +150,12 @@ export function expressionScore(expression: string, confidence: number, raw?: st
 
   let parses = false;
   try {
-    parses = evaluateExpression(expression).success;
+    // Evaluate the DISPLAY alphabet, not the raw candidate: "6×7" and
+    // "144÷12" are valid arithmetic, but the evaluator speaks ASCII, so a
+    // raw ×/÷ candidate scored -40 and lost to a lone digit (the P4 bug).
+    parses = evaluateExpression(
+      expression.replace(/[×✕·]/g, '*').replace(/÷/g, '/')
+    ).success;
   } catch {
     parses = false;
   }

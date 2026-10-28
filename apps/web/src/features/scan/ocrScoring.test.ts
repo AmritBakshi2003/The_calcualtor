@@ -83,6 +83,17 @@ describe('expressionScore', () => {
   it('scores empty text as unusable', () => {
     expect(expressionScore('   ', 90)).toBe(Number.NEGATIVE_INFINITY);
   });
+
+  // P4: "6×7" and "144÷12" must parse and win against a lone digit. Raw
+  // ×/÷ candidates used to be fed to the evaluator as-is, scored -40, and
+  // silently lost.
+  it('scores a display-alphabet multiplication candidate as parseable', () => {
+    expect(expressionScore('6×7', 60, '6x7')).toBeGreaterThan(expressionScore('7', 60, '7'));
+  });
+
+  it('scores a display-alphabet division candidate as parseable', () => {
+    expect(expressionScore('144÷12', 60, '144÷12')).toBeGreaterThan(expressionScore('12', 60, '12'));
+  });
 });
 
 describe('rankSegments', () => {
