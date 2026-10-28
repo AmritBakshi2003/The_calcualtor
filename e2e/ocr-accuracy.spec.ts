@@ -268,11 +268,16 @@ test.describe('Scan tab OCR accuracy', () => {
     const text = await uploadAndRecognize(page, dataUrl, 'edit');
     expect(text).not.toBe('');
 
-    // Regression guard: with a character whitelist active Tesseract reports 0%
-    // for perfectly read text, which is what the UI used to display.
+    // Regression guard: with the scan character whitelist active Tesseract
+    // reports 0% confidence even for perfectly read text (a reporting
+    // quirk), and the UI therefore hides the Confidence line entirely rather
+    // than display the meaningless "Confidence: 0.00%" (unit-tested in
+    // ScanCalculator.test.tsx). If a real confidence is shown it must never
+    // be the 0 that the whitelist reports.
     const confidenceLine = page.getByText(/Confidence: /);
-    await expect(confidenceLine).toBeVisible();
-    expect(await confidenceLine.innerText()).not.toContain('0.00%');
+    if ((await confidenceLine.count()) > 0) {
+      expect(await confidenceLine.innerText()).not.toContain('0.00%');
+    }
 
     const box = page.locator('#recognized-expression');
     // A user correcting a misread digit: select everything and retype
@@ -281,8 +286,10 @@ test.describe('Scan tab OCR accuracy', () => {
     await page.keyboard.type('12+35');
     await expect(box).toHaveValue('12+35');
 
-    // The old result must be cleared while editing, and the new one solved
-    await page.getByRole('button', { name: /Solve Expression/i }).click();
+    // The old result must be cleared while editing, and the new one solved.
+    // The bare preview server has no /api routes, so this scan ships
+    // unverified and the button reads "Solve anyway (unverified)".
+    await page.getByRole('button', { name: /Solve (Expression|anyway)/i }).click();
     await expect(page.getByText('47')).toBeVisible();
   });
 });

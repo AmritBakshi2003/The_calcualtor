@@ -9,7 +9,7 @@ import { SCAN_WHITELIST } from './normalize';
 import { OCR_DEFAULT_PARAMS } from '../useOCRWorker';
 
 vi.mock('tesseract.js', () => ({
-  default: { PSM: { SINGLE_LINE: '7', RAW_LINE: '13' } },
+  default: { PSM: { SINGLE_LINE: '7', RAW_LINE: '13', SINGLE_BLOCK: '6' } },
 }));
 
 // The candidate runner builds its canvases in the browser; jsdom has no
@@ -51,7 +51,7 @@ describe('recognizeScanCandidates', () => {
     worker = makeWorker();
   });
 
-  it('runs exactly 6 recognitions: 3 variants × PSM 7 and PSM 13', async () => {
+  it('runs exactly 9 recognitions: 3 variants × PSM 7, 13 and the block PSM 6', async () => {
     scriptRecognitions(worker, ['2+3']);
 
     const candidates = await recognizeScanCandidates({} as HTMLCanvasElement, async () => worker);
@@ -61,10 +61,13 @@ describe('recognizeScanCandidates', () => {
     expect(candidates.map((c) => `${c.variant}-psm${c.psm}`)).toEqual([
       'grayscale-psm7',
       'grayscale-psm13',
+      'grayscale-psm6',
       'otsu-psm7',
       'otsu-psm13',
+      'otsu-psm6',
       'sauvola-psm7',
       'sauvola-psm13',
+      'sauvola-psm6',
     ]);
   });
 
@@ -78,7 +81,9 @@ describe('recognizeScanCandidates', () => {
       .map(([params]) => params as Record<string, string>)
       .filter((params) => !('user_defined_dpi' in params));
     expect(overrides).toHaveLength(MAX_RECOGNITIONS_PER_SCAN);
-    expect(overrides.map((p) => p.tessedit_pageseg_mode)).toEqual(['7', '13', '7', '13', '7', '13']);
+    expect(overrides.map((p) => p.tessedit_pageseg_mode)).toEqual([
+      '7', '13', '6', '7', '13', '6', '7', '13', '6',
+    ]);
     expect(overrides.every((p) => p.tessedit_char_whitelist === SCAN_WHITELIST)).toBe(true);
 
     // After each pass the worker is returned to its defaults.
@@ -89,7 +94,9 @@ describe('recognizeScanCandidates', () => {
     // grayscale passes read only a digit run; the Otsu variant reads the
     // real expression with an operator. Scores must put the operator
     // reading on top even though every pass reports the same confidence.
-    scriptRecognitions(worker, ['23', '23', '2+3', '2+3', '2+3', '2+3']);
+    // grayscale reads a digit run on all three PSMs; the Otsu variant reads
+    // the real expression on all three.
+    scriptRecognitions(worker, ['23', '23', '23', '2+3', '2+3', '2+3', '2+3', '2+3', '2+3']);
 
     const ranked = await recognizeScanCandidates({} as HTMLCanvasElement, async () => worker);
 
@@ -109,10 +116,13 @@ describe('recognizeScanCandidates', () => {
     expect(ranked.map((c) => `${c.variant}-psm${c.psm}`)).toEqual([
       'grayscale-psm7',
       'grayscale-psm13',
+      'grayscale-psm6',
       'otsu-psm7',
       'otsu-psm13',
+      'otsu-psm6',
       'sauvola-psm7',
       'sauvola-psm13',
+      'sauvola-psm6',
     ]);
   });
 
@@ -148,13 +158,47 @@ describe('recognizeScanCandidates', () => {
     expect(best.confidence).toBe(87);
   });
 
-  it('still returns 6 candidates when every pass throws', async () => {
+  it('still returns 9 candidates when every pass throws', async () => {
     worker.recognize.mockRejectedValue(new Error('engine exploded'));
 
     const ranked = await recognizeScanCandidates({} as HTMLCanvasElement, async () => worker);
 
     expect(ranked).toHaveLength(MAX_RECOGNITIONS_PER_SCAN);
     expect(ranked.every((c) => c.expression === '')).toBe(true);
+  });
+
+  it('splits a multi-line block read into one candidate per line', async () => {
+    // The old pipeline merged multi-line captures into unparseable junk.
+    // A PSM 6 / raw-line pass over "2 x 45 = 90" above "TOTAL 90.00" must
+    // become per-line candidates so the expression line can win.
+    const ocrLines = (texts: string[]) => ({
+      data: {
+        text: texts.join('\n'),
+        confidence: 0,
+        lines: texts.map((text, index) => ({
+          text,
+          confidence: 0,
+          bbox: { x0: 0, y0: index * 20, x1: 100, y1: 20 + index * 20 },
+          words: [],
+        })),
+      },
+    });
+    // One multi-line pass; all other passes report their single-line reading.
+    worker.recognize.mockImplementation(() => {
+      const call = worker.recognize.mock.calls.length;
+      return Promise.resolve(call === 3 ? ocrLines(['2 x 45 = 90', 'TOTAL 90.00']) : ocrText('90.00', 0));
+    });
+
+    const ranked = await recognizeScanCandidates({} as HTMLCanvasElement, async () => worker);
+
+    // The per-line candidates missed neither line, and the expression wins.
+    const twoLineCandidates = ranked.filter((c) => c.rawText === '2 x 45 = 90');
+    expect(twoLineCandidates).toHaveLength(1);
+    expect(twoLineCandidates[0].variant).toBe('grayscale');
+    expect(twoLineCandidates[0].psm).toBe(6);
+    expect(twoLineCandidates[0].expression).toBe('2×45'); // the "=90" result tail is stripped
+    expect(ranked[0].expression).toBe('2×45');
+    expect(ranked[0].segment?.text).toBe('2 x 45 = 90');
   });
 });
 

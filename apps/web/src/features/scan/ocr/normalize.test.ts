@@ -22,8 +22,23 @@ describe('normalize', () => {
       expect(normalize('=')).toBeNull();
     });
 
-    it('keeps a mid-expression "=" when the text stays valid', () => {
-      expect(normalize('2+3=5')).toBe('2+3=5');
+    it('strips the "= result" tail so a scanned "expr = result" stays the expression', () => {
+      // Screens and receipts print the whole equation ("2x45 = 90"):
+      // everything after the final '=' is the evaluated result, not input.
+      expect(normalize('2x45=90')).toBe('2×45');
+      expect(normalize('123+456=579')).toBe('123+456');
+      expect(normalize('=576')).toBeNull(); // nothing but the result
+    });
+
+    it('keeps percent signs that follow a completed operand', () => {
+      expect(normalize('200*10%')).toBe('200×10%');
+      expect(normalize('10%')).toBe('10%');
+    });
+
+    it('accepts a unary minus (a scanned negative number)', () => {
+      expect(normalize('-5+3')).toBe('-5+3');
+      expect(normalize('-45')).toBe('-45');
+      expect(normalize('-√9')).toBe('-√9');
     });
   });
 
@@ -93,19 +108,20 @@ describe('normalize', () => {
       expect(normalize('2^^3')).toBeNull(); // caret now counts as an operator
     });
 
-    it('rejects expressions that do not start and end with a number or bracket', () => {
-      expect(normalize('-5+3')).toBeNull(); // leading operator
-      expect(normalize('2+3+')).toBeNull(); // trailing operator
+    it('rejects expressions that do not start and end with an operand/postfix', () => {
       expect(normalize('×2+3')).toBeNull();
       expect(normalize('.5+1')).toBeNull(); // leading decimal point
       expect(normalize('2+3.')).toBeNull(); // trailing decimal point
       expect(normalize('+')).toBeNull();
+      expect(normalize('--5')).toBeNull(); // double unary minus
+      expect(normalize('-×5')).toBeNull(); // unary minus before an operator
+      expect(normalize('-')).toBeNull(); // a bare minus
     });
   });
 
   it('the alphabet it cleans to is the scan whitelist', () => {
     // Single source of truth with the Tesseract setting (useOCRWorker.ts).
-    expect(SCAN_WHITELIST).toBe('0123456789+-×÷*/().=x√π²³^');
+    expect(SCAN_WHITELIST).toBe('0123456789+-×÷*/().=x√π²³^%');
     for (const char of normalize('2+3') ?? '') {
       expect(SCAN_WHITELIST.includes(char)).toBe(true);
     }
@@ -140,13 +156,23 @@ describe('normalize', () => {
       expect(normalize('2^3^2')).toBe('2^3^2');
     });
 
-    it('still rejects stranded operators and exponents', () => {
+    it('still rejects stranded operators, exponents and stray postfix symbols', () => {
       expect(normalize('2^')).toBeNull(); // unfinished power
       expect(normalize('^2')).toBeNull();
       expect(normalize('2+²')).toBeNull(); // exponent after an operator
       expect(normalize('2^²')).toBeNull(); // exponent after an operator
       expect(normalize('2²²')).toBeNull(); // exponent after an exponent
       expect(normalize('²2')).toBeNull(); // exponent cannot start
+      expect(normalize('2+%')).toBeNull(); // percent after an operator only leaves a trailing operator
+      expect(normalize('10%²')).toBeNull(); // exponent after a postfix
+    });
+
+    it('drops a stray percent sign instead of discarding the whole reading', () => {
+      // OCR debris beside an operator ("0.5*%8=") must not invalidate the
+      // otherwise-correct reading: the misplaced '%' is dropped and reported.
+      expect(normalizeWithWarnings('0.5*%8=')).toEqual({ expression: '0.5×8', dropped: ['%'] });
+      expect(normalizeWithWarnings('2%%')).toEqual({ expression: '2%', dropped: ['%'] });
+      expect(normalizeWithWarnings('%5')).toEqual({ expression: '5', dropped: ['%'] });
     });
   });
 

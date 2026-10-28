@@ -112,11 +112,15 @@ function stripWords(text: string): string {
   return text.replace(/[A-Za-z]+/g, ' ');
 }
 
-/** Operators with an operand on both sides ("2+3", "(1+2)*3"), not "-5". */
+/** Operators with an operand on both sides ("2+3", "(1+2)*3", "2×7"), not
+ *  "-5". The scan alphabet's display forms ("×", "÷") count like their ASCII
+ *  forms: expressionScore evaluates the display alphabet ("6×7" parses), so
+ *  it must also reward the operator signal ("2×45" over a digit run).
+ */
 function countOperators(text: string): number {
   let count = 0;
   for (let i = 1; i < text.length - 1; i++) {
-    if (!'+-*/^'.includes(text[i])) continue;
+    if (!'+-*/^×÷'.includes(text[i])) continue;
     if (/[\d).]/.test(text[i - 1]) && /[\d(.]/.test(text[i + 1])) count++;
   }
   return count;

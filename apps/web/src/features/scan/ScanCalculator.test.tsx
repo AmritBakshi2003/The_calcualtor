@@ -56,8 +56,8 @@ vi.mock('./scanEngineClient', async (importOriginal) => {
 
 const ocrText = (text: string, confidence = 90) => ({ data: { text, confidence, lines: [] } });
 
-// One scan = 3 variants × PSM 7/13 = 6 recognitions (Phase-1 cap).
-const CALLS_PER_SCAN = 6;
+// One scan = 3 variants × PSM 7/13/6 = 9 recognitions (Phase-1 cap).
+const CALLS_PER_SCAN = 9;
 
 class FakeImage {
   width = 100;

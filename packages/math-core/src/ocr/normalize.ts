@@ -16,7 +16,7 @@
  * dropping a character silently can change the value: "12+3¤5" -> "12+35").
  * `normalize()` keeps its old signature for existing callers.
  */
-export const SCAN_WHITELIST = '0123456789+-×÷*/().=x√π²³^';
+export const SCAN_WHITELIST = '0123456789+-×÷*/().=x√π²³^%';
 
 /**
  * Look-alike mapping applied BEFORE the whitelist filter, so a misread glyph
@@ -54,10 +54,11 @@ const CHAR_MAP: Record<string, string> = {
 /** Operators that cannot appear twice in a row ("^" included: "2^^3"). */
 const OPERATORS = '+-×÷*/^';
 
-/** Exponent superscripts: postfix, need a completed operand before them, and
- *  can END an expression ("2²"). The caret ("^") may also appear between two
- *  operands but never ends one ("2^" is unfinished). */
-const EXPONENT_SUFFIXES = '²³';
+/** Postfix operators (percent and exponent superscripts): they need a
+ *  completed operand before them, and they can END an expression ("2²",
+ *  "10%"). The caret ("^") may appear between two operands but never ends
+ *  one ("2^" is unfinished) and is handled with the flow operators. */
+const UNICODE_POSTFIX = '%²³';
 
 /** The radical sign is a prefix: it may sit anywhere an operand may start. */
 const RADICAL = '√';
@@ -99,6 +100,16 @@ export function normalizeWithWarnings(text: string): NormalizeResult {
       continue;
     }
     if (SCAN_WHITELIST.includes(char)) {
+      // A percent sign is arithmetic only after a completed operand (10%,
+      // (8)%, π%). A stray '%' beside an operator (OCR debris: "0.5*%8")
+      // would invalidate the whole otherwise-correct reading, so a
+      // misplaced '%/' (or any '%' not directly after an operand) is DROPPED
+      // and reported in `dropped` — the clean value keeps shipping, marked
+      // unverified.
+      if (char === '%' && !/[0-9)π]/.test(out[out.length - 1] ?? '')) {
+        if (!dropped.includes(char)) dropped.push(char);
+        continue;
+      }
       out += char;
       continue;
     }
@@ -113,8 +124,17 @@ export function normalizeWithWarnings(text: string): NormalizeResult {
   let cleaned = out.replace(/\s+/g, '');
 
   // Calculator screens print an "=" after the expression ("2+3="); it marks
-  // the result, it is not an operator. Strip trailing markers only.
-  cleaned = cleaned.replace(/=+$/, '');
+  // the result, it is not an operator. A printout/screen often shows the whole
+  // equation ("2x45=90", "12+3=590.00"): everything after the final "=" is
+  // the evaluated result, not typed input, so the scanned expression side is
+  // kept instead. Applied repeatedly so messy markers ("2+3==", "2+3=5=")
+  // strip clean too.
+  for (;;) {
+    const eqIndex = cleaned.lastIndexOf('=');
+    if (eqIndex < 0) break;
+    if (!/^[\d.%²³]*$/.test(cleaned.slice(eqIndex + 1))) break;
+    cleaned = cleaned.slice(0, eqIndex);
+  }
 
   if (cleaned.length === 0) return { expression: null, dropped };
 
@@ -123,21 +143,15 @@ export function normalizeWithWarnings(text: string): NormalizeResult {
   return { expression: cleaned, dropped };
 }
 
-/**
- * Shape check used by normalizeWithWarnings:
- *  - starts with a digit, "(", or √ (the radical opens an operand);
- *  - ends with a digit, ")", "²", or "³" (exponents close an operand; a
- *    trailing caret is unfinished);
- *  - brackets balance and never close before opening;
- *  - no two flow operators in a row ("2+-3", "2^^3");
- *  - "²/³" always follows a completed operand, never an operator or another
- *    exponent ("2+²", "2^²", "2²²" are rejected).
- */
 function validShape(cleaned: string): boolean {
-  if (!/[0-9(]/.test(cleaned[0]) && cleaned[0] !== RADICAL) return false;
+  const start = cleaned[0];
+  if (start === '-') {
+    // Unary minus: only counts when the next character opens an operand.
+    if (!/[0-9(]/.test(cleaned[1] ?? '') && (cleaned[1] ?? '') !== RADICAL) return false;
+  } else if (!/[0-9(]/.test(start) && start !== RADICAL) return false;
   const last = cleaned[cleaned.length - 1];
   // π may end an expression ("√9+π") — it is a constant, not an operator.
-  if (!/[0-9)]/.test(last) && !EXPONENT_SUFFIXES.includes(last) && last !== 'π') return false;
+  if (!/[0-9)%²³]/.test(last) && last !== 'π') return false;
 
   let depth = 0;
   for (let i = 0; i < cleaned.length; i++) {
@@ -152,10 +166,10 @@ function validShape(cleaned: string): boolean {
     }
     if (
       i > 0 &&
-      EXPONENT_SUFFIXES.includes(char) &&
-      (OPERATORS + EXPONENT_SUFFIXES).includes(cleaned[i - 1])
+      UNICODE_POSTFIX.includes(char) &&
+      (OPERATORS + UNICODE_POSTFIX).includes(cleaned[i - 1])
     ) {
-      // "2+²", "2^²", "2²²": an exponent needs a completed operand.
+      // "2+²", "2^²", "2²²", "2%%": a postfix needs a completed operand.
       return false;
     }
   }

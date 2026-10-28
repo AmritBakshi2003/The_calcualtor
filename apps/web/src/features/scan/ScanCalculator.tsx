@@ -193,7 +193,7 @@ export function ScanCalculator() {
   /**
    * Recognize via the Phase-1 pipeline: three preprocessing variants
    * (grayscale, Otsu, Sauvola), each read with PSM 7 and PSM 13 under the
-   * LSTM engine and the scan whitelist — at most 6 recognitions per scan —
+   * LSTM engine and the scan whitelist — at most 9 recognitions per scan —
    * then normalize, score and rank the readings. Returns the best candidate
    * for the local fallback AND the full candidate list for the consensus
    * route (each variant is a distinct source there).
@@ -238,7 +238,7 @@ export function ScanCalculator() {
       const preprocessedCanvas = preprocessForOCR(canvas);
       emitStage('prepare', 'done');
 
-      // Tesseract variant passes (Phase 1 pipeline, max 6 recognitions).
+      // Tesseract variant passes (Phase 1 pipeline, max 9 recognitions).
       emitStage('tesseract', 'running');
       let recognition = await runRecognition(preprocessedCanvas);
 

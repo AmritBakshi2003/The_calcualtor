@@ -8,6 +8,12 @@ import { test, expect, type Page, type Route } from '@playwright/test';
  * same-origin /api routes are intercepted with mocks around a REAL build and
  * real local Tesseract — recognition, editing, solving and graceful
  * degradation all run exactly as a user experiences them.
+ *
+ * The scan pipeline (Phase 3-5) talks to POST /api/scan/consensus
+ * (cache -> decide -> protected Gemini arbiter) and POST /api/scan/ocrspace;
+ * the consensus response carries { expression, verified, sources,
+ * alternatives, stages }, and the UI renders the verdict through the
+ * `verification-badge` + `engine-sources` test ids.
  */
 
 function jsonRoute(status: number, body: object) {
@@ -60,18 +66,42 @@ test.describe('Gemini-powered scanner', () => {
     // Server reports Gemini on; recognition agrees with the local reading.
     const capabilitiesMock = jsonRoute(200, { gemini: true });
     let recognizeCount = 0;
-    const recognizeMock = async (route: Route) => {
+    const consensusMock = async (route: Route) => {
       recognizeCount += 1;
-      const body = (await route.request().postDataJSON()) as { hint: string | null };
-      // The OCR hint (or the fallback flag) must accompany the image bytes.
-      const hasParts = typeof body.hint === 'string' || body.hint === null;
-      const status = hasParts ? 200 : 500;
+      const body = (await route.request().postDataJSON()) as {
+        candidates?: { expression: string }[];
+      };
+      // The consensus body must carry the local candidates (the proof the
+      // arbiter receives exactly what Tesseract read).
+      const hint = body.candidates?.[0]?.expression ?? '';
+      const hasCandidates = typeof hint === 'string' && body.candidates?.length;
+      const status = hasCandidates ? 200 : 500;
       // Mirror the real Worker: structural regex keeps only math characters.
-      const corrected = body.hint === null ? '' : body.hint.replace(/O/g, '0').replace(/[^0-9+\-*/.()]/g, '');
-      await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(corrected ? { expression: corrected, source: 'gemini', unreadable: false } : { expression: '', source: 'gemini', unreadable: true }) });
+      const corrected = hint.replace(/O/g, '0').replace(/[^0-9+\-*/.()]/g, '');
+      await route.fulfill({
+        status,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          corrected
+            ? {
+                expression: corrected,
+                verified: true,
+                sources: ['tesseract:grayscale-psm7', 'gemini'],
+                alternatives: [],
+                stages: ['cache:miss', 'decide:needs_arbiter', 'arbiter:gemini-3.5-flash-lite:match'],
+              }
+            : {
+                expression: '',
+                verified: false,
+                sources: [],
+                alternatives: [],
+                stages: ['cache:miss', 'decide:needs_arbiter', 'arbiter:skipped:not_configured'],
+              }
+        ),
+      });
     };
     await page.route('**/api/scan/capabilities', capabilitiesMock);
-    await page.route('**/api/scan/recognize', recognizeMock);
+    await page.route('**/api/scan/consensus', consensusMock);
     let solveCount = 0;
     const solveMock = async (route: Route) => {
       solveCount += 1;
@@ -100,8 +130,10 @@ test.describe('Gemini-powered scanner', () => {
     await recognize.click();
     await expect(recognize).toBeEnabled({ timeout: 120000 });
     await expect(page.locator('#recognized-expression')).toHaveValue('12+34', { timeout: 30000 });
-    await expect(page.getByTestId('recognition-source')).toHaveText(/Cross-validated by Google Gemini/);
-    expect(recognizeCount).toBeGreaterThanOrEqual(1);
+    await expect(page.getByTestId('verification-badge')).toHaveText('✓ Verified');
+    await expect(page.getByTestId('engine-sources')).toContainText('Tesseract');
+    await expect(page.getByTestId('engine-sources')).toContainText('Gemini');
+    expect(recognizeCount).toBe(1);
 
     // ---- Simple question: solved locally, free, no model call
     await page.getByRole('button', { name: /Solve Expression/i }).click();
@@ -125,10 +157,12 @@ test.describe('Gemini-powered scanner', () => {
 
     // ---- Disagreement: Gemini corrects the local reading, UI warns
     recognizeCount = 0;
-    await page.route('**/api/scan/recognize', jsonRoute(200, {
+    await page.route('**/api/scan/consensus', jsonRoute(200, {
       expression: '98-76',
-      source: 'gemini',
-      unreadable: false,
+      verified: false,
+      sources: ['gemini'],
+      alternatives: [],
+      stages: ['cache:miss', 'decide:needs_arbiter', 'arbiter:gemini-3.5-flash-lite:no_match'],
     }));
     await page.getByRole('button', { name: /Clear image/i }).click();
     const disagreeUrl = await renderExpression(page, '12 + 34');
@@ -136,16 +170,18 @@ test.describe('Gemini-powered scanner', () => {
     await recognize.click();
     await expect(recognize).toBeEnabled({ timeout: 120000 });
     await expect(page.locator('#recognized-expression')).toHaveValue('98-76', { timeout: 30000 });
-    await expect(page.getByTestId('recognition-source')).toHaveText(/read this differently/);
+    // The server's answer disagrees with the local reading: unverified.
+    await expect(page.getByTestId('verification-badge')).toHaveText('⚠ Unverified — please check');
+    await expect(page.getByText('This reading was not confirmed by two engines')).toBeVisible();
   });
 
   test('degrades gracefully when Gemini is unavailable', async ({ page }) => {
     // Errors happen AFTER a successful local scan in real life; here the
-    // server is simply not answering with Gemini.
+    // consensus service is simply not answering with Gemini.
     test.setTimeout(240000);
 
     await page.route('**/api/scan/capabilities', jsonRoute(200, { gemini: true }));
-    await page.route('**/api/scan/recognize', jsonRoute(503, { error: 'gemini_not_configured' }));
+    await page.route('**/api/scan/consensus', jsonRoute(503, { error: 'gemini_not_configured' }));
 
     await openScanTab(page);
     await expect(page.getByTestId('scan-engine-badge')).toHaveText(/Powered by Google Gemini/, {
@@ -158,10 +194,10 @@ test.describe('Gemini-powered scanner', () => {
     const recognize = page.getByRole('button', { name: /Recognize Text/i });
     await recognize.click();
     await expect(recognize).toBeEnabled({ timeout: 120000 });
-    // The local engine's answer stands; a spoken notice explains the fallback.
+    // The local engine's answer stands; the pipeline says where it broke.
     await expect(page.locator('#recognized-expression')).toHaveValue(/63\s*\+\s*27/, { timeout: 40000 });
-    await expect(page.getByText(/Local recognition is still active|Gemini is not configured/)).toBeVisible();
-    await expect(page.getByTestId('recognition-source')).toHaveText(/Recognized locally/);
+    await expect(page.getByTestId('verification-badge')).toHaveText('⚠ Unverified — please check');
+    await expect(page.getByText('not available')).toBeVisible();
   });
 
   test('local-only mode without the Worker', async ({ page }) => {

@@ -1,7 +1,8 @@
 /**
  * Phase-1 recognition runner: each preprocessing variant (grayscale, Otsu,
- * Sauvola — see ./preprocess.ts) is recognized with PSM 7 (single text line)
- * and PSM 13 (raw line), for at most 6 recognitions per scan.
+ * Sauvola — see ./preprocess.ts) is recognized with PSM 7 (single text line),
+ * PSM 13 (raw line) and PSM 6 (one uniform block, so a multi-line capture can
+ * be split into per-line candidates), for at most 9 recognitions per scan.
  *
  * Settings shared by every pass:
  *  - LSTM engine (the worker is created with OEM.LSTM_ONLY in
@@ -24,16 +25,18 @@ import { classifyPlusOrDivide } from '../glyphCheck';
 import { buildVariants, type OcrVariantName } from './preprocess';
 import { normalize, normalizeWithWarnings, SCAN_WHITELIST } from './normalize';
 
-/** PSMs the variants run under: 7 = single text line, 13 = raw line. */
-export const SCAN_PSMS = [7, 13] as const;
+/** PSMs the variants run under: 7 = single text line, 13 = raw line,
+ *  6 = one uniform block (its result is split into per-line candidates). */
+export const SCAN_PSMS = [7, 13, 6] as const;
 export type ScanPsm = (typeof SCAN_PSMS)[number];
 
-/** Hard cap; 3 variants × 2 PSMs = exactly 6. */
-export const MAX_RECOGNITIONS_PER_SCAN = 6;
+/** Hard cap; 3 variants × 3 PSMs = exactly 9. */
+export const MAX_RECOGNITIONS_PER_SCAN = 9;
 
 const PSM_TO_TESSERACT: Record<ScanPsm, Tesseract.PSM> = {
   7: Tesseract.PSM.SINGLE_LINE,
   13: Tesseract.PSM.RAW_LINE,
+  6: Tesseract.PSM.SINGLE_BLOCK,
 };
 
 /** One raw recognition pass over one variant. */
@@ -46,6 +49,8 @@ export interface VariantPassResult {
   psm: ScanPsm;
   /** Best-ranked line segment, for low-confidence glyph UIs downstream. */
   segment?: OcrSegment;
+  /** All ranked non-empty line segments; the block PSM (6) may report many. */
+  segments: OcrSegment[];
 }
 
 /** The slice of the Tesseract worker the runner needs (eases test doubles). */
@@ -88,6 +93,7 @@ export async function runVariantPasses(
       let rawText = '';
       let confidence = 0;
       let segment: OcrSegment | undefined;
+      let segments: OcrSegment[] = [];
       try {
         await worker.setParameters({
           tessedit_pageseg_mode: PSM_TO_TESSERACT[psm],
@@ -96,7 +102,8 @@ export async function runVariantPasses(
         const result = await worker.recognize(image);
         rawText = (result.data.text ?? '').trim();
         confidence = clampConfidence(result.data.confidence);
-        segment = rankSegments(toSegments(result))[0];
+        segments = rankSegments(toSegments(result));
+        segment = segments[0];
       } catch {
         // Record the failure and keep going; candidates judge the rest.
       } finally {
@@ -113,6 +120,7 @@ export async function runVariantPasses(
         variant: variant.name,
         psm,
         segment,
+        segments,
       });
     }
   }
@@ -232,20 +240,20 @@ export async function recognizeScanCandidates(
 ): Promise<ScanCandidate[]> {
   const passes = await runVariantPasses(canvas, getWorker);
 
-  const candidates: ScanCandidate[] = passes.map((pass) => {
+  const buildCandidate = (pass: VariantPassResult, rawText: string, segment?: OcrSegment): ScanCandidate => {
     const reads = pass.confidence > 0;
     const confidence = reads ? pass.confidence : WHITELIST_CONFIDENCE_FALLBACK;
-    const cleaned = normalizeWithWarnings(pass.rawText);
+    const cleaned = normalizeWithWarnings(rawText);
     const expression = cleaned.expression ?? '';
     return {
       expression,
-      rawText: pass.rawText,
+      rawText,
       confidence,
       confidenceKnown: reads,
       variant: pass.variant,
       psm: pass.psm,
-      score: expressionScore(expression, confidence, pass.rawText),
-      segment: pass.segment,
+      score: expressionScore(expression, confidence, rawText),
+      segment,
       // The whitelist-only pipeline cannot substitute look-alike letters:
       // characters outside the scan alphabet are DROPPED by normalize, never
       // swapped ("2O5" -> "25"), so there is no honest "O→0" correction to
@@ -255,7 +263,36 @@ export async function recognizeScanCandidates(
       // became "2+35") instead of letting a silently-cleaned value win.
       dropped: expression ? cleaned.dropped : [],
     };
-  });
+  };
+
+  const candidates: ScanCandidate[] = [];
+  for (const pass of passes) {
+    const lines = pass.segments.filter((candidateLine) => candidateLine.text.trim().length > 0);
+    if (lines.length > 1) {
+      // A block read (PSM 6, and a raw-line pass over a multi-line capture):
+      // the whole raw text would concatenate the lines into junk, so the
+      // per-line readings are the candidates and the merged text is not.
+      for (const line of lines) {
+        candidates.push(buildCandidate(pass, line.text.trim(), line));
+      }
+    } else {
+      candidates.push(buildCandidate(pass, pass.rawText, pass.segment));
+    }
+  }
+
+  // Independent variant passes that agree on the exact same reading are
+  // evidence: a small multiplicity bonus breaks score ties in favour of the
+  // majority ("200×10%" read correctly by 4 of 6 passes must outrank the
+  // equally-scored misread "200+20%" from 2). Capped so a lucky junk reading
+  // repeated twice can never beat a structurally better one.
+  const agreement = new Map<string, number>();
+  for (const candidate of candidates) {
+    agreement.set(candidate.expression, (agreement.get(candidate.expression) ?? 0) + 1);
+  }
+  for (const candidate of candidates) {
+    const duplicates = (agreement.get(candidate.expression) ?? 1) - 1;
+    candidate.score += Math.min(duplicates, 3);
+  }
 
   return rankScanCandidates(candidates);
 }
