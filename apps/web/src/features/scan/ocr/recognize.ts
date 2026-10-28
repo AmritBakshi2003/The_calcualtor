@@ -22,7 +22,7 @@ import {
 } from '../ocrScoring';
 import { classifyPlusOrDivide } from '../glyphCheck';
 import { buildVariants, type OcrVariantName } from './preprocess';
-import { normalize, SCAN_WHITELIST } from './normalize';
+import { normalize, normalizeWithWarnings, SCAN_WHITELIST } from './normalize';
 
 /** PSMs the variants run under: 7 = single text line, 13 = raw line. */
 export const SCAN_PSMS = [7, 13] as const;
@@ -202,6 +202,13 @@ export interface ScanCandidate {
   segment?: OcrSegment;
   /** Ambiguous characters this pass auto-corrected, e.g. ["O→0"]. */
   substitutions: string[];
+  /**
+   * Characters normalize() had to DROP from this reading because the scan
+   * alphabet does not name them ("2+3¤5" dropped ["¤"]). Dropping can
+   * change the value, so any non-empty list must show a warning and keep
+   * the reading unverified. Empty when the reading cleaned losslessly.
+   */
+  dropped: string[];
 }
 
 /**
@@ -228,7 +235,8 @@ export async function recognizeScanCandidates(
   const candidates: ScanCandidate[] = passes.map((pass) => {
     const reads = pass.confidence > 0;
     const confidence = reads ? pass.confidence : WHITELIST_CONFIDENCE_FALLBACK;
-    const expression = normalize(pass.rawText) ?? '';
+    const cleaned = normalizeWithWarnings(pass.rawText);
+    const expression = cleaned.expression ?? '';
     return {
       expression,
       rawText: pass.rawText,
@@ -243,6 +251,9 @@ export async function recognizeScanCandidates(
       // swapped ("2O5" -> "25"), so there is no honest "O→0" correction to
       // report and the ambiguity warning cannot trigger.
       substitutions: [],
+      // Lost symbols travel with the reading so the UI can warn ("2+3¤5"
+      // became "2+35") instead of letting a silently-cleaned value win.
+      dropped: expression ? cleaned.dropped : [],
     };
   });
 

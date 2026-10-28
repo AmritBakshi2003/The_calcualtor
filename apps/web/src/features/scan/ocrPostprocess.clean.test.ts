@@ -109,6 +109,45 @@ describe('cleanForEvaluation', () => {
     expect(Number(evaluateExpression(pipeline('2π')).result)).toBeCloseTo(2 * Math.PI, 6);
   });
 
+  // P1/P2 symbol conversions: √ π ² ³ ^ must SURVIVE cleaning with their
+  // meaning, never be deleted (deleting √ turned -8490.57 into -3460).
+  it('converts superscript exponents to the caret operator', () => {
+    expect(cleanForEvaluation('2²')).toBe('(2)^2');
+    expect(evaluateExpression(cleanForEvaluation('2²')).result).toBe(4);
+    expect(evaluateExpression(cleanForEvaluation('2.5³')).result).toBe(15.625);
+    expect(evaluateExpression(cleanForEvaluation('(2+3)²')).result).toBe(25);
+    expect(evaluateExpression(cleanForEvaluation('π²')).result).toBeCloseTo(Math.PI ** 2, 6);
+  });
+
+  it('keeps an explicit caret between operands', () => {
+    expect(evaluateExpression(cleanForEvaluation('2^3')).result).toBe(8);
+    // mathjs ^ is right-associative: 2^(3^2) = 2^9 = 512.
+    expect(evaluateExpression(cleanForEvaluation('2^3^2')).result).toBe(512);
+  });
+
+  it('reads the P1 radical expression with its exact value', () => {
+    // √(4556+546) − 8562 ≈ -8490.57 — reading it WITHOUT the √ gives -3460,
+    // which is what users saw when √ was silently deleted.
+    expect(cleanForEvaluation('√(4556+546)-8562')).toBe('sqrt(4556+546)-8562');
+    expect(Number(evaluateExpression(cleanForEvaluation('√(4556+546)-8562')).result)).toBeCloseTo(
+      Math.sqrt(4556 + 546) - 8562,
+      6
+    );
+    expect(Number(evaluateExpression(cleanForEvaluation('√9+π')).result)).toBeCloseTo(
+      3 + Math.PI,
+      6
+    );
+    expect(evaluateExpression(cleanForEvaluation('√(16)')).result).toBe(4);
+  });
+
+  it('reads the P2 joined display expression end to end', () => {
+    const joined = '56162+15660-82626×(9426262÷652)';
+    const cleaned = cleanForEvaluation(joined);
+    // × ÷ fold to ASCII; the grouping survives intact.
+    expect(cleaned).toBe('56162+15660-82626*(9426262/652)');
+    expect(evaluateExpression(cleaned).success).toBe(true);
+  });
+
   it('keeps percent signs that are not between two operands', () => {
     expect(cleanForEvaluation('5%')).toBe('5%');
     expect(cleanForEvaluation('50%')).toBe('50%');

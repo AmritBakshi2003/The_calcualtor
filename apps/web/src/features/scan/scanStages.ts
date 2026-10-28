@@ -21,6 +21,11 @@ export interface ScanStage {
   detail?: string;
 }
 
+/** Detail text for a consensus answer the Gemini layer never saw. */
+export const LOCAL_ONLY_DETAIL = 'Local only — not cross-checked';
+/** Detail text for a consensus answer the Gemini layer confirmed. */
+export const VERIFIED_DETAIL = 'Verified by Tesseract + Gemini';
+
 /** Stages in pipeline order; the UI renders this exact order. */
 export const SCAN_STAGES: ReadonlyArray<{ id: StageId; label: string }> = [
   { id: 'prepare', label: 'Preparing image' },
@@ -89,9 +94,9 @@ export function serverStagesToEvents(serverStages: string[]): StageEvent[] {
   } else if (arbiter.endsWith(':parse_failed')) {
     events.push({ stage: 'gemini', state: 'failed', detail: 'review answer unreadable' });
   } else if (arbiter.endsWith(':match')) {
-    events.push({ stage: 'gemini', state: 'done', detail: 'confirmed the reading' });
+    events.push({ stage: 'gemini', state: 'done', detail: 'Verified by Tesseract + Gemini' });
   } else if (arbiter.endsWith(':no_match')) {
-    events.push({ stage: 'gemini', state: 'done', detail: 'reviewed — no agreement' });
+    events.push({ stage: 'gemini', state: 'done', detail: 'Local only — not cross-checked' });
   } else {
     events.push({ stage: 'gemini', state: 'done' });
   }

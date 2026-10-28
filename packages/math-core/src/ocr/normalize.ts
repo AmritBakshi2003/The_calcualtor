@@ -9,10 +9,14 @@
  * the cleaner can never drift apart.
  *
  * One alphabet, one source of truth. `normalize()` maps look-alikes onto it:
- * x/X/* -> "×", look-alikes of ÷ -> "÷"; anything outside the string is
- * dropped before validation.
+ * x/X/* -> "×", look-alikes of ÷ -> "÷". Anything outside the string is
+ * DROPPED, but never silently any more: `normalizeWithWarnings()` also
+ * returns every dropped character so callers can mark the reading UNVERIFIED
+ * and tell the user which symbols were not recognized (scanner P2 fix —
+ * dropping a character silently can change the value: "12+3¤5" -> "12+35").
+ * `normalize()` keeps its old signature for existing callers.
  */
-export const SCAN_WHITELIST = '0123456789+-×÷*/().=x';
+export const SCAN_WHITELIST = '0123456789+-×÷*/().=x√π²³^';
 
 /**
  * Look-alike mapping applied BEFORE the whitelist filter, so a misread glyph
@@ -22,6 +26,9 @@ export const SCAN_WHITELIST = '0123456789+-×÷*/().=x';
  *  - x / X / * are multiplication in a calculator expression; "*" is mapped
  *    to the display form "×" so candidates read the way the user wrote them
  *    (the evaluator still accepts both via cleanForEvaluation).
+ *  - Multiplication dots and asterisk look-alikes ("·", "∙", "⋅", "∗"):
+ *    some calculators print a middle dot as the multiplication sign, and at
+ *    low resolution an asterisk and a dot are frequently the same mark.
  *  - "÷" look-alikes: the Unicode division slash (U+2215), the fraction
  *    slash (U+2044), and the colon, which printed ratios and some calculators
  *    use for division. A time like "9:41" becomes "9÷41", but candidate
@@ -32,6 +39,10 @@ const CHAR_MAP: Record<string, string> = {
   'x': '×',
   'X': '×',
   '*': '×',
+  '·': '×',
+  '∙': '×',
+  '⋅': '×',
+  '∗': '×',
   '∕': '÷',
   '⁄': '÷',
   ':': '÷',
@@ -40,66 +51,118 @@ const CHAR_MAP: Record<string, string> = {
   '—': '-',
 };
 
-/** Operators that cannot appear twice in a row. */
-const OPERATORS = '+-×÷*/';
+/** Operators that cannot appear twice in a row ("^" included: "2^^3"). */
+const OPERATORS = '+-×÷*/^';
+
+/** Exponent superscripts: postfix, need a completed operand before them, and
+ *  can END an expression ("2²"). The caret ("^") may also appear between two
+ *  operands but never ends one ("2^" is unfinished). */
+const EXPONENT_SUFFIXES = '²³';
+
+/** The radical sign is a prefix: it may sit anywhere an operand may start. */
+const RADICAL = '√';
 
 /**
- * Turn raw OCR text into a clean candidate expression, or null when nothing
- * expression-like survives:
+ * Turn raw OCR text into a clean candidate expression and the list of
+ * characters that were dropped along the way:
  *
  *  1. map look-alike characters onto the scan alphabet,
- *  2. drop every character outside SCAN_WHITELIST,
+ *  2. drop every character outside SCAN_WHITELIST (whitespace and the ","
+ *     thousands separator fold away silently — presentation, not content;
+ *     every OTHER dropped character is reported in `dropped`,
+ *     first-appearance order),
  *  3. remove all whitespace,
- *  4. strip trailing "=" (a printed result marker on calculator screens,
- *     presentation, not part of the expression),
- *  5. validate: balanced brackets, no two operators in a row, and the text
- *     must start and end with a number or a bracket.
+ *  4. strip trailing "=" (a printed result marker on calculator screens),
+ *  5. validate: balanced brackets, no two operators in a row, and the shape
+ *     rules below.
  *
- * Pure; returns null for empty, junk, or structurally invalid input.
- * Note the spec-literal validity rules mean a leading unary minus ("-5+3")
- * or a trailing operator ("2+3+") is rejected.
+ * Pure; `expression` is null for empty, junk, or structurally invalid input,
+ * and `dropped` is non-empty exactly when a character could not be accounted
+ * for as a look-alike, separator, or presentation. Callers must treat a
+ * reading with a non-empty `dropped` as UNVERIFIED.
  */
-export function normalize(text: string): string | null {
-  if (!text) return null;
+export interface NormalizeResult {
+  expression: string | null;
+  /** Characters dropped from the raw text to produce `expression`. */
+  dropped: string[];
+}
 
+export function normalizeWithWarnings(text: string): NormalizeResult {
+  if (!text) return { expression: null, dropped: [] };
+
+  const dropped: string[] = [];
   let out = '';
   for (const char of text) {
-    out += CHAR_MAP[char] ?? char;
-  }
-
-  // Drop everything the scanner alphabet does not name.
-  let cleaned = '';
-  for (const char of out) {
-    if (SCAN_WHITELIST.includes(char)) cleaned += char;
+    const mapped = CHAR_MAP[char];
+    if (mapped) {
+      out += mapped;
+      continue;
+    }
+    if (SCAN_WHITELIST.includes(char)) {
+      out += char;
+      continue;
+    }
+    if (/\s/.test(char) || char === ',') {
+      // Presentation: whitespace and the digit-group separator fold away.
+      continue;
+    }
+    if (!dropped.includes(char)) dropped.push(char);
   }
 
   // Whitespace is presentation.
-  cleaned = cleaned.replace(/\s+/g, '');
+  let cleaned = out.replace(/\s+/g, '');
 
   // Calculator screens print an "=" after the expression ("2+3="); it marks
   // the result, it is not an operator. Strip trailing markers only.
   cleaned = cleaned.replace(/=+$/, '');
 
-  if (cleaned.length === 0) return null;
+  if (cleaned.length === 0) return { expression: null, dropped };
 
-  // Must start and end with a number or a bracket.
-  if (!/[0-9(]/.test(cleaned[0]) || !/[0-9)]/.test(cleaned[cleaned.length - 1])) return null;
+  if (!validShape(cleaned)) return { expression: null, dropped };
 
-  // Brackets must balance (and never close before opening).
+  return { expression: cleaned, dropped };
+}
+
+/**
+ * Shape check used by normalizeWithWarnings:
+ *  - starts with a digit, "(", or √ (the radical opens an operand);
+ *  - ends with a digit, ")", "²", or "³" (exponents close an operand; a
+ *    trailing caret is unfinished);
+ *  - brackets balance and never close before opening;
+ *  - no two flow operators in a row ("2+-3", "2^^3");
+ *  - "²/³" always follows a completed operand, never an operator or another
+ *    exponent ("2+²", "2^²", "2²²" are rejected).
+ */
+function validShape(cleaned: string): boolean {
+  if (!/[0-9(]/.test(cleaned[0]) && cleaned[0] !== RADICAL) return false;
+  const last = cleaned[cleaned.length - 1];
+  // π may end an expression ("√9+π") — it is a constant, not an operator.
+  if (!/[0-9)]/.test(last) && !EXPONENT_SUFFIXES.includes(last) && last !== 'π') return false;
+
   let depth = 0;
-  for (const char of cleaned) {
+  for (let i = 0; i < cleaned.length; i++) {
+    const char = cleaned[i];
     if (char === '(') depth++;
     if (char === ')') {
       depth--;
-      if (depth < 0) return null;
+      if (depth < 0) return false;
+    }
+    if (i > 0 && OPERATORS.includes(char) && OPERATORS.includes(cleaned[i - 1])) {
+      return false;
+    }
+    if (
+      i > 0 &&
+      EXPONENT_SUFFIXES.includes(char) &&
+      (OPERATORS + EXPONENT_SUFFIXES).includes(cleaned[i - 1])
+    ) {
+      // "2+²", "2^²", "2²²": an exponent needs a completed operand.
+      return false;
     }
   }
-  if (depth !== 0) return null;
+  return depth === 0;
+}
 
-  // No two operators in a row ("2+-3", "3××4").
-  for (let i = 1; i < cleaned.length; i++) {
-    if (OPERATORS.includes(cleaned[i]) && OPERATORS.includes(cleaned[i - 1])) return null;
-  }
-
-  return cleaned;
+/** Backwards-compatible entry point: just the expression, or null. */
+export function normalize(text: string): string | null {
+  return normalizeWithWarnings(text).expression;
 }

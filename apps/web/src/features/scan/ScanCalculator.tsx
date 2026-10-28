@@ -60,6 +60,8 @@ export function ScanCalculator() {
     verified: boolean | null;
     sources: string[];
     alternatives: string[];
+    /** Symbols dropped during cleanup; non-empty forces the warning line. */
+    dropped: string[];
   } | null>(null);
   // True while a Gemini solve call is in flight.
   const [geminiBusy, setGeminiBusy] = useState(false);
@@ -184,6 +186,7 @@ export function ScanCalculator() {
     segment: candidate.segment,
     substitutions: candidate.substitutions,
     rawText: candidate.rawText,
+    dropped: candidate.dropped,
   });
 
   /**
@@ -284,6 +287,9 @@ export function ScanCalculator() {
               expression: candidate.expression,
               confidence: candidate.confidence,
               source: `tesseract:${candidate.variant}-psm${candidate.psm}`,
+              // Cleanups that dropped symbols must not look verified:
+              // "2+3¤5" -> "2+35" silently changes the value.
+              dropped: candidate.dropped.length > 0 ? candidate.dropped : undefined,
             })),
             ...ocrspaceCandidates,
           ]
@@ -294,7 +300,7 @@ export function ScanCalculator() {
         emitStage('compare', 'failed', 'The comparison service is unreachable.');
         emitStage('gemini', 'skipped', 'not available');
         // Without the consensus verdict the local reading ships unverified.
-        setScanMeta({ verified: false, sources: [], alternatives: [] });
+        setScanMeta({ verified: false, sources: [], alternatives: [], dropped: [] });
       }
 
       // The consensus expression wins when the server produced one; the
@@ -306,10 +312,19 @@ export function ScanCalculator() {
         : '';
 
       if (consensus) {
+        // Warn about the text actually SHOWN: the server's reading when it
+        // produced one (these are marked unverified by the server), the local
+        // candidate's otherwise ("2+3¤5" became "2+35" locally).
+        // A dropped character silently can change the value, so it never
+        // ships as verified either way.
+        const dropped = consensus.expression?.length
+          ? (consensus.dropped ?? [])
+          : (localBest?.dropped ?? []);
         setScanMeta({
-          verified: consensus.verified,
+          verified: consensus.verified && dropped.length === 0,
           sources: consensus.sources,
           alternatives: consensus.alternatives,
+          dropped,
         });
       }
 
@@ -737,6 +752,11 @@ export function ScanCalculator() {
                       </span>
                     )}
                   </div>
+                  {scanMeta.dropped.length > 0 && (
+                    <p data-testid="dropped-symbols" role="alert" className="text-amber-600 dark:text-amber-400">
+                      Some symbols were not recognized: {scanMeta.dropped.join(', ')}
+                    </p>
+                  )}
                   {!scanMeta.verified && scanMeta.alternatives.length > 0 && (
                     <div data-testid="alternatives" className="flex flex-wrap items-center gap-1.5">
                       <span className="text-gray-500 dark:text-gray-400">Other readings — tap to use:</span>

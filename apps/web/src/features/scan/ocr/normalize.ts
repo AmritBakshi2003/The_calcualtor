@@ -4,4 +4,9 @@
  * Worker's OCR.space engine share one implementation. Re-exported here so
  * existing `./normalize` imports in the scanner keep working.
  */
-export { normalize, SCAN_WHITELIST } from '@calculator-suite/math-core';
+export {
+  normalize,
+  normalizeWithWarnings,
+  SCAN_WHITELIST,
+  type NormalizeResult,
+} from '@calculator-suite/math-core';

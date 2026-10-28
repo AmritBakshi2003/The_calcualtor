@@ -24,12 +24,21 @@ export interface ConsensusClientResult {
   sources: string[];
   alternatives: string[];
   stages: string[];
+  /**
+   * Characters the server had to DROP from the winning expression
+   * ("2+3¤5" -> "2+35"). Non-empty means the reading is unverified and
+   * the UI must warn: "Some symbols were not recognized: <chars>".
+   */
+  dropped?: string[];
 }
 
 export interface ConsensusCandidateInput {
   expression: string;
   confidence?: number;
   source: string;
+  /** Characters this reading's cleanup DROPPED ("2+3¤5" -> "2+35"); the
+   * server uses them to keep a lossy reading unverified. */
+  dropped?: string[];
 }
 
 async function postJson(path: string, body: unknown): Promise<Response> {

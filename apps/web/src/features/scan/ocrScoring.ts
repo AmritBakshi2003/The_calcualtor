@@ -56,6 +56,12 @@ export interface OcrCandidate {
   substitutions?: string[];
   /** The raw pre-cleaning text this pass read (the cross-check hint sent to Gemini). */
   rawText?: string;
+  /**
+   * Symbols normalize() had to DROP from this reading ("2+3¤5" dropped
+   * ["¤"]). A non-empty list means the value may silently be wrong; the UI
+   * warns and keeps the reading unverified.
+   */
+  dropped?: string[];
 }
 
 /**

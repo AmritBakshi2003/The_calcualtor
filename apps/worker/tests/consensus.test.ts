@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import worker, { scanLimiter } from '../src/index';
+import worker, { limiter, scanLimiter } from '../src/index';
 import type { KVNamespace } from '@cloudflare/workers-types';
 import type { WorkerEnv } from '../src/env';
 import {
@@ -73,6 +73,7 @@ const consensusBody = (candidates: ConsensusCandidate[]) => ({
 });
 
 beforeEach(() => {
+  limiter.reset(); // 60 API requests/10 min per IP would trip across tests
   scanLimiter.reset(); // 10 scans/min per IP would trip across tests
 });
 
@@ -382,6 +383,40 @@ describe('POST /api/scan/consensus', () => {
       last = await post(consensusBody([{ expression: '2+3', source: 'tesseract:a' }]), env);
     }
     expect(last?.status).toBe(429);
+  });
+
+  it('reports dropped symbols and never verifies a lossy reading (P1)', async () => {
+    vi.stubGlobal('fetch', makeFetchMock());
+    // The client is the only one that knows its cleanup history, so it
+    // reports the dropped characters with each candidate ("2+3¤" -> "2+3").
+    const response = await post(
+      consensusBody([
+        { expression: '2+3¤', source: 'tesseract:grayscale-psm7', confidence: 90, dropped: ['¤'] },
+        { expression: '2+3¤', source: 'tesseract:grayscale-psm13', confidence: 88, dropped: ['¤'] },
+      ]),
+      makeEnv({ kv: makeKv() })
+    );
+
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.expression).toBe('2+3');
+    expect(body.verified).toBe(false); // a dropped char can silently change the value
+    expect(body.dropped).toEqual(['¤']);
+  });
+
+  it('keeps √ and π readings intact through the whole pipeline (P1)', async () => {
+    vi.stubGlobal('fetch', makeFetchMock());
+    const response = await post(
+      consensusBody([
+        { expression: '√(4,556+546)−8,562', source: 'tesseract:grayscale-psm7' },
+        { expression: '√(4556+546)-8562', source: 'ocrspace' },
+      ]),
+      makeEnv({ kv: makeKv() })
+    );
+
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.expression).toBe('√(4556+546)-8562');
+    expect(body.verified).toBe(true); // nothing was dropped
+    expect(body.dropped).toBeUndefined();
   });
 
   it('validates the candidate array strictly', async () => {

@@ -1,5 +1,10 @@
 // OCR output normalization (shared by the browser scanner and the Worker)
-export { normalize, SCAN_WHITELIST } from './ocr/normalize';
+export {
+  normalize,
+  normalizeWithWarnings,
+  SCAN_WHITELIST,
+  type NormalizeResult,
+} from './ocr/normalize';
 
 // Expression parsing and evaluation
 export {

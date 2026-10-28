@@ -15,7 +15,7 @@
  * `POST /api/scan/consensus` in index.ts.
  */
 
-import { normalize } from '@calculator-suite/math-core';
+import { normalize, normalizeWithWarnings } from '@calculator-suite/math-core';
 import type { KVNamespace } from '@cloudflare/workers-types';
 import type { FetchLike, WorkerEnv } from './env';
 import { ApiError, readJsonBody } from './http';
@@ -32,6 +32,13 @@ export interface ConsensusCandidate {
   confidence?: number;
   /** Engine/variant label, e.g. "tesseract:grayscale-psm7", "ocrspace". */
   source: string;
+  /**
+   * Characters this engine's cleanup DROPPED from its own raw output to
+   * produce `expression` ("2+3¤5" -> "2+35"). The client is the only one
+   * that still knows them, so the server trusts this list (validated, capped)
+   * and never verifies a reading that carries any. Optional.
+   */
+  dropped?: string[];
 }
 
 /** One distinct normalized expression, ranked. */
@@ -41,6 +48,8 @@ export interface RankedCandidate {
   confidence: number;
   /** Distinct sources that read this expression. */
   sources: string[];
+  /** Union of the dropped symbols reported by every source reading this. */
+  dropped: string[];
 }
 
 export type Decision = {
@@ -53,6 +62,8 @@ export type Decision = {
   alternatives: string[];
   /** Top 3 distinct ranked candidates — the arbiter's input. */
   topCandidates: RankedCandidate[];
+  /** Dropped symbols behind `expression` (same group as sources). */
+  dropped: string[];
 };
 
 function clampConfidence(value: unknown): number {
@@ -69,7 +80,13 @@ function clampConfidence(value: unknown): number {
 export function rankCandidates(candidates: ConsensusCandidate[]): RankedCandidate[] {
   const groups = new Map<
     string,
-    { expression: string; sources: Set<string>; maxConfidence: number; order: number }
+    {
+      expression: string;
+      sources: Set<string>;
+      maxConfidence: number;
+      dropped: string[];
+      order: number;
+    }
   >();
 
   for (const candidate of candidates) {
@@ -83,11 +100,20 @@ export function rankCandidates(candidates: ConsensusCandidate[]): RankedCandidat
 
     let group = groups.get(expression);
     if (!group) {
-      group = { expression, sources: new Set(), maxConfidence: 0, order: groups.size };
+      group = {
+        expression,
+        sources: new Set(),
+        maxConfidence: 0,
+        dropped: [],
+        order: groups.size,
+      };
       groups.set(expression, group);
     }
     group.sources.add(source);
     group.maxConfidence = Math.max(group.maxConfidence, clampConfidence(candidate.confidence));
+    for (const char of candidate.dropped ?? []) {
+      if (!group.dropped.includes(char)) group.dropped.push(char);
+    }
   }
 
   return [...groups.values()]
@@ -101,6 +127,7 @@ export function rankCandidates(candidates: ConsensusCandidate[]): RankedCandidat
       expression: group.expression,
       confidence: group.maxConfidence,
       sources: [...group.sources],
+      dropped: group.dropped,
     }));
 }
 
@@ -123,6 +150,7 @@ export function decide(candidates: ConsensusCandidate[]): Decision {
       sources: winner.sources,
       alternatives: ranked.filter((g) => g !== winner).slice(0, 3).map((g) => g.expression),
       topCandidates: ranked.slice(0, 3),
+      dropped: winner.dropped,
     };
   }
 
@@ -133,6 +161,7 @@ export function decide(candidates: ConsensusCandidate[]): Decision {
     sources: best ? best.sources : [],
     alternatives: ranked.slice(1, 4).map((g) => g.expression),
     topCandidates: ranked.slice(0, 3),
+    dropped: best ? best.dropped : [],
   };
 }
 
@@ -251,6 +280,23 @@ export function parseConsensusRequest(body: object): ConsensusRequestBody {
     ) {
       throw new ApiError(400, 'VALIDATION_ERROR', 'Candidate confidence must be a number.');
     }
+    if (candidate.dropped !== undefined) {
+      const dropped = candidate.dropped;
+      if (
+        !Array.isArray(dropped) ||
+        dropped.length > 12 ||
+        dropped.some((item) => typeof item !== 'string' || [...item].length !== 1)
+      ) {
+        throw new ApiError(
+          400,
+          'VALIDATION_ERROR',
+          'Candidate dropped must be an array of at most 12 single characters.'
+        );
+      }
+    }
+    const droppedList = Array.isArray(candidate.dropped)
+      ? [...new Set((candidate.dropped as string[]).filter((item) => typeof item === 'string'))]
+      : undefined;
     return {
       expression: candidate.expression,
       source:
@@ -261,6 +307,7 @@ export function parseConsensusRequest(body: object): ConsensusRequestBody {
         typeof candidate.confidence === 'number' && Number.isFinite(candidate.confidence)
           ? candidate.confidence
           : undefined,
+      dropped: droppedList && droppedList.length > 0 ? droppedList : undefined,
     };
   });
 
@@ -324,6 +371,18 @@ export async function handleConsensusBody(
         }
       : await arbitrate(env, decision, parsed.image, imageBytes, stages, options);
 
+  // Dropping a character silently can change the value ("2+3¤5" -> "2+35"),
+  // so a reading with lost symbols is never verified:true, whatever path
+  // produced it. The dropped chars come from the engines that dropped them
+  // (only the client still knows its own cleanup history) plus a defensive
+  // re-check of the final expression.
+  const { expression, dropped } = normalizeWithWarnings(result.expression);
+  const mergedDropped = [...new Set([...(decision.dropped ?? []), ...dropped])];
+  if (expression !== null && mergedDropped.length > 0) {
+    result.verified = false;
+    result.dropped = mergedDropped;
+  }
+
   // Cache the pipeline result WITHOUT the per-response cache marker, so a
   // hit can append its own 'cache:hit' cleanly.
   await cachePut(kv, key, result);
@@ -385,6 +444,13 @@ export interface ConsensusResult {
   alternatives: string[];
   /** Human-readable pipeline trace, in order. */
   stages: string[];
+  /**
+   * Characters normalize() had to DROP from the winning expression ("2+3¤5"
+   * -> "2+35"). Dropping can change the value, so any non-empty list forces
+   * `verified: false` — the UI shows "Some symbols were not recognized".
+   * Present only when something was dropped.
+   */
+  dropped?: string[];
 }
 
 // ---------------------------------------------------------------------------

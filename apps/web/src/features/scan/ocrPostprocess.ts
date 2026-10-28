@@ -209,7 +209,9 @@ export function findLowConfidenceIndices(confidences: number[], threshold: numbe
 export function cleanForEvaluation(text: string): string {
   if (!text) return '';
 
-  const lines = text.split(/\r?\n/).filter((l) => /[0-9]/.test(l));
+  // A pure "π²" or "√(16)" line carries no digit; the symbol lines are the
+  // expression just as much as a digit line is.
+  const lines = text.split(/\r?\n/).filter((l) => /[0-9√π]/.test(l));
   const line = pickExpressionLine(lines);
   // Also handle text typed straight into the edit box (no postprocessOCR run):
   // "2x3" must not reach the evaluator as a symbol named x.
@@ -223,6 +225,16 @@ export function cleanForEvaluation(text: string): string {
   s = s.replace(/√\s*\(/g, 'sqrt(');
   s = s.replace(/√\s*(\d+(?:\.\d+)?)/g, 'sqrt($1)');
   s = s.replace(/√/g, ''); // an unreadable fragment: drop, the evaluator's error is clearer
+  // Exponent superscripts become the caret operator the evaluator supports
+  // (mathjs maps "^" to pow). The base keeps its grouping so a multi-digit,
+  // decimal or parenthesized base stays one operand: "2²" -> "(2)^2",
+  // "(2+3)²" -> "(2+3)^2", "π²" -> "(pi)^2". Runs after the √ mapping so
+  // "√9²" walks out as "sqrt(9)^2", and before the π->pi mapping so "π²"
+  // wraps cleanly.
+  s = s.replace(/\)²/g, ')^2');
+  s = s.replace(/\)³/g, ')^3');
+  s = s.replace(/(\d+(?:\.\d+)?|[a-zπ])²/g, '($1)^2');
+  s = s.replace(/(\d+(?:\.\d+)?|[a-zπ])³/g, '($1)^3');
   s = s.replace(/π/g, 'pi');
   // math.js-style implicit multiplication is not part of the evaluator's
   // grammar, so insert the explicit operator where OCR geometry implies it.

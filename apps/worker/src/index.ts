@@ -42,8 +42,8 @@ import { assertClientEvaluable, buildSolveResult, parseSolveRequest } from './so
 import { handleOcrSpace } from './ocrspace';
 import { handleConsensusBody } from './consensus';
 
-/** Per-client flood guard: 60 Gemini calls per 10 minutes per IP. */
-const limiter = new RateLimiter(60, 10 * 60 * 1000);
+/** Per-client flood guard: 60 Gemini calls per 10 minutes per IP. Exported for test resets. */
+export const limiter = new RateLimiter(60, 10 * 60 * 1000);
 /** Scan flood guard (Phase 3, step 6): 10 scans per minute per IP. Exported for test resets. */
 export const scanLimiter = new RateLimiter(10, 60 * 1000);
 /** Hard body cap for POST bodies (4 MB covers a 3 MB base64 image + payload). */

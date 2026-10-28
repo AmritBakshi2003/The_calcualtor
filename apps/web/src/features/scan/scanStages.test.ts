@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  LOCAL_ONLY_DETAIL,
   SCAN_STAGES,
   applyStageEvent,
   applyStageEvents,
   initialStages,
   serverStagesToEvents,
+  VERIFIED_DETAIL,
   type StageState,
 } from './scanStages';
 
@@ -93,8 +95,8 @@ describe('serverStagesToEvents', () => {
 
   it('maps each arbiter outcome onto the Gemini row', () => {
     const cases: Array<[string, StageState, string?]> = [
-      ['arbiter:gemini-3.5-flash-lite:match', 'done', 'confirmed the reading'],
-      ['arbiter:gemini-3.8-flash:no_match', 'done', 'reviewed — no agreement'],
+      ['arbiter:gemini-3.5-flash-lite:match', 'done', VERIFIED_DETAIL],
+      ['arbiter:gemini-3.8-flash:no_match', 'done', LOCAL_ONLY_DETAIL],
       ['arbiter:gemini-3.5-flash-lite:429:busy', 'skipped', 'Gemini is busy — try again shortly.'],
       ['arbiter:skipped:busy', 'skipped', 'Gemini is busy — try again shortly.'],
       ['arbiter:skipped:daily_cap', 'skipped', 'Gemini daily limit reached.'],
@@ -116,6 +118,6 @@ describe('serverStagesToEvents', () => {
       'arbiter:gemini-3.5-flash-lite:no_match',
       'arbiter:gemini-3.8-flash:match',
     ]);
-    expect(events[2]).toMatchObject({ state: 'done', detail: 'confirmed the reading' });
+    expect(events[2]).toMatchObject({ state: 'done', detail: VERIFIED_DETAIL });
   });
 });

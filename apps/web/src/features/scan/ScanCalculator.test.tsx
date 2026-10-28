@@ -281,6 +281,25 @@ describe('ScanCalculator editing', () => {
     expect(sources.textContent).toContain('OCR.space');
   });
 
+  it('a dropped-symbol reading warns, names the symbols, and never shows \u2713 Verified', async () => {
+    worker.recognize.mockResolvedValue(ocrText('2+3\u00a4'));
+    mockConsensus({
+      expression: '2+3',
+      verified: true, // the server thought consensus until the drops came in
+      sources: ['tesseract:grayscale-psm7'],
+     alternatives: [],
+      stages: ['cache:miss', 'decide:consensus'],
+      dropped: ['\u00a4'],
+    });
+    const box = (await uploadAndRecognize()) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(box.value).toBe('2+3'));
+    const warning = await screen.findByTestId('dropped-symbols');
+    expect(warning.textContent).toContain('Some symbols were not recognized');
+    expect(warning.textContent).toContain('\u00a4');
+    expect((await screen.findByTestId('verification-badge')).textContent).toContain('Unverified');
+  });
+
   it('unverified result: badge, tappable alternatives, and no auto-solve', async () => {
     worker.recognize.mockResolvedValue(ocrText('2+3'));
     mockConsensus({
