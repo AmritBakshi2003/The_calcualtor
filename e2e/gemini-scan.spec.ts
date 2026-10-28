@@ -117,11 +117,6 @@ test.describe('Gemini-powered scanner', () => {
 
     await openScanTab(page);
 
-    // The badge reflects the capability probe.
-    await expect(page.getByTestId('scan-engine-badge')).toHaveText(/Powered by Google Gemini/, {
-      timeout: 15000,
-    });
-
     // ---- Lens-style scan: local Tesseract + Gemini cross-validation
     const dataUrl = await renderExpression(page, '12 + 34');
     await uploadImage(page, dataUrl, 'agree');
@@ -149,11 +144,6 @@ test.describe('Gemini-powered scanner', () => {
     await expect(page.getByTestId('scan-result')).toHaveText('52.5', { timeout: 20000 });
     await expect(page.getByText(/Computed by Google Gemini/)).toBeVisible();
     expect(solveCount).toBe(1);
-
-    // ---- Manual "Ask Gemini" for an already-solvable expression
-    await page.getByTestId('ask-gemini').click();
-    await expect(page.getByTestId('scan-result')).toHaveText('52.5', { timeout: 20000 });
-    expect(solveCount).toBe(2);
 
     // ---- Disagreement: Gemini corrects the local reading, UI warns
     recognizeCount = 0;
@@ -184,9 +174,6 @@ test.describe('Gemini-powered scanner', () => {
     await page.route('**/api/scan/consensus', jsonRoute(503, { error: 'gemini_not_configured' }));
 
     await openScanTab(page);
-    await expect(page.getByTestId('scan-engine-badge')).toHaveText(/Powered by Google Gemini/, {
-      timeout: 15000,
-    });
 
     const dataUrl = await renderExpression(page, '63 + 27');
     await uploadImage(page, dataUrl, 'degrade');
@@ -197,16 +184,14 @@ test.describe('Gemini-powered scanner', () => {
     // The local engine's answer stands; the pipeline says where it broke.
     await expect(page.locator('#recognized-expression')).toHaveValue(/63\s*\+\s*27/, { timeout: 40000 });
     await expect(page.getByTestId('verification-badge')).toHaveText('⚠ Unverified — please check');
-    await expect(page.getByText('not available')).toBeVisible();
   });
 
   test('local-only mode without the Worker', async ({ page }) => {
     // No /api routes exist on the bare preview server -> HTML or 404.
     await openScanTab(page);
-    await expect(page.getByTestId('scan-engine-badge')).toHaveText(/Local recognition only/, {
-      timeout: 15000,
-    });
-    // No Ask Gemini button without the capability.
+    // The engine badge was removed from the UI; Gemini stays a backend
+    // concern, so no badge and no Ask Gemini control is ever rendered.
+    await expect(page.getByTestId('scan-engine-badge')).toHaveCount(0);
     await expect(page.getByTestId('ask-gemini')).toHaveCount(0);
   });
 });

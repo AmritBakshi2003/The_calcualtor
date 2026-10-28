@@ -95,9 +95,15 @@ export function ScanCalculator() {
     setScanMeta(null);
   };
 
-  /** Emit one pipeline stage event (Phase 4 progress UI). */
-  const emitStage = (stage: StageId, state: StageState, detail?: string) =>
+  /**
+   * Emit one pipeline stage event. The pipeline is no longer shown as a
+   * checklist on the page: events go to the console as log lines and feed
+   * the collapsed "Pipeline logs" view below the Recognize button.
+   */
+  const emitStage = (stage: StageId, state: StageState, detail?: string) => {
+    console.debug(`[scan] ${stage}: ${state}${detail ? ` — ${detail}` : ''}`);
     setStages((prev) => applyStageEvent(prev, { stage, state, detail }));
+  };
 
   // Guard against oversized uploads (the accept attribute is only a UI hint).
   const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15MB
@@ -367,9 +373,10 @@ export function ScanCalculator() {
   };
 
   /**
-   * Ask Gemini to solve the current question. Used automatically when local
-   * evaluation fails on a genuinely complex question (complexity gate) and
-   * manually via the "Ask Gemini" button.
+   * Ask Gemini (the backend worker) to solve the current question. Used
+   * automatically when local evaluation fails on a genuinely complex
+   * question (complexity gate) or the text is a word question; there is no
+   * manual button — the backend decides when a model call is needed.
    */
   const askGeminiSolve = async (question: string): Promise<boolean> => {
     if (!geminiEnabled) return false;
@@ -542,26 +549,10 @@ export function ScanCalculator() {
   return (
     <div className="max-w-4xl mx-auto px-2 sm:px-0 space-y-4 sm:space-y-6">
       <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-4 sm:p-6">
-        <div className="flex items-center justify-between mb-3 sm:mb-4">
+        <div className="mb-3 sm:mb-4">
           <h2 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">
             Scan Calculator
           </h2>
-          <span
-            data-testid="scan-engine-badge"
-            className={`ml-2 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${
-              geminiEnabled === true
-                ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300'
-                : geminiEnabled === false
-                ? 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
-                : 'animate-pulse bg-gray-100 text-gray-400 dark:bg-gray-800'
-            }`}
-          >
-            {geminiEnabled === true
-              ? '✨ Powered by Google Gemini'
-              : geminiEnabled === false
-              ? 'Local recognition only'
-              : 'Checking engines…'}
-          </span>
         </div>
 
         <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
@@ -664,9 +655,17 @@ export function ScanCalculator() {
               {isProcessing ? 'Processing...' : '🔍 Recognize Text'}
             </button>
             {stages.some((stage) => stage.state !== 'pending') && (
-              <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700 rounded-lg">
-                <StageList stages={stages} />
-              </div>
+              // Logs view: the pipeline stages stay out of the page itself and
+              // live in this collapsed, opt-in list (details are also written
+              // to the console by emitStage).
+              <details data-testid="scan-logs" className="mt-3 text-xs sm:text-sm text-gray-500 dark:text-gray-400">
+                <summary className="cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-300">
+                  Pipeline logs
+                </summary>
+                <div className="mt-2 p-3 bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700 rounded-lg">
+                  <StageList stages={stages} />
+                </div>
+              </details>
             )}
           </div>
         )}
@@ -800,16 +799,6 @@ export function ScanCalculator() {
                 ? 'Solve anyway (unverified)'
                 : 'Solve Expression'}
             </button>
-            {geminiEnabled === true && recognizedText && (
-              <button
-                onClick={() => void askGeminiSolve(cleanForEvaluation(recognizedText) || recognizedText)}
-                disabled={geminiBusy}
-                data-testid="ask-gemini"
-                className="w-full p-3 bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 rounded-lg font-medium hover:bg-purple-200 dark:hover:bg-purple-900/60 transition-colors disabled:bg-gray-300 dark:disabled:bg-gray-700 disabled:cursor-not-allowed text-xs sm:text-sm"
-              >
-                🤖 Solve this with Google Gemini
-              </button>
-            )}
           </div>
         )}
 
