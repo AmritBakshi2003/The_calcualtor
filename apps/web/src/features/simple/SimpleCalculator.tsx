@@ -3,6 +3,7 @@ import { useCalculatorStore } from '../../store';
 import { ScientificSection } from './ScientificSection';
 import { useState, useEffect } from 'react';
 import { BackspaceIcon } from '../../components/BackspaceIcon';
+import { formatExpressionForDisplay } from './displayFormat';
 
 const categories = [
   'Length',
@@ -255,7 +256,7 @@ export function SimpleCalculator() {
           <div className="flex-1 flex flex-col justify-end items-end">
             {expression && (
               <div className="text-xs sm:text-sm text-gray-600 dark:text-gray-400 mb-1 sm:mb-2" aria-live="polite">
-                {expression}
+                {formatExpressionForDisplay(expression)}
               </div>
             )}
             {error && (
