@@ -1,0 +1,33 @@
+# Security headers for the Calculator Suite (Cloudflare Workers Static Assets)
+# Served from the assets directory; applies to all routes.
+
+# Hashed build output — the filename changes whenever the content does.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Tesseract engine files are versioned by the npm package, NOT by filename.
+# Caching them as immutable pinned a device to last year's worker.min.js /
+# core for up to a year: after a tesseract.js upgrade the main bundle spoke a
+# newer worker protocol than the cached worker, and OCR silently returned
+# garbage such as "." instead of digits. Revalidate so an upgrade takes
+# effect immediately (a 304 still costs one small round trip).
+/tesseract/*.js
+  Cache-Control: public, max-age=300, must-revalidate
+
+# eng.traineddata.gz is re-downloaded on every build and is not content
+# addressed either; a truncated copy must never survive for a year.
+/tesseract/*.gz
+  Cache-Control: public, max-age=300, must-revalidate
+
+# No caching for index.html to always get latest
+/index.html
+  Cache-Control: no-cache
+
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(self), microphone=(), geolocation=()
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' blob: data:; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'

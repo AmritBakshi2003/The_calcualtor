@@ -1,0 +1,4 @@
+# Copy to `.dev.vars` (git-ignored) for `wrangler dev` local runs.
+GEMINI_API_KEY="your-private-key-here"
+# Optional model override; default is documented in apps/worker/src/gemini.ts
+# GEMINI_MODEL="gemini-3.8-flash"

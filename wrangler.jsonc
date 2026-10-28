@@ -1,0 +1,11 @@
+{
+  "name": "the-calcualtor",
+  "compatibility_date": "2026-10-20",
+  // The Worker serves the Gemini scanner API; static assets are unchanged.
+  "main": "./apps/worker/src/index.ts",
+  "assets": {
+    "directory": "./apps/web/dist",
+    // API routes must reach the Worker, not the asset router's SPA fallback.
+    "run_worker_first": ["/api/*"]
+  }
+}
