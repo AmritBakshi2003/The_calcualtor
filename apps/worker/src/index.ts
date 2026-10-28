@@ -37,6 +37,7 @@ import {
   buildRecognizeResult,
   mergedDigitsSuspect,
   parseRecognizeRequest,
+  RECOGNIZE_TIMEOUT_MS,
 } from './recognize';
 import { assertClientEvaluable, buildSolveResult, parseSolveRequest } from './solve';
 import { handleOcrSpace } from './ocrspace';
@@ -132,10 +133,16 @@ function verifyParts(images: RecognizeImages, candidate: string): object[] {
 
 async function handleRecognize(request: Request, env: WorkerEnv): Promise<Response> {
   const body = parseRecognizeRequest(await readJsonBody(request));
-  const modelText = await generateContent(env, {
-    parts: recognizeParts(body, body.hint),
-    systemInstruction: RECOGNIZE_SYSTEM_INSTRUCTION,
-  });
+  // P3: handwriting recognition needs the longer 25 s budget on BOTH passes
+  // (the verify pass is the one production cut off at the default 20 s).
+  const modelText = await generateContent(
+    env,
+    {
+      parts: recognizeParts(body, body.hint),
+      systemInstruction: RECOGNIZE_SYSTEM_INSTRUCTION,
+    },
+    { timeoutMs: RECOGNIZE_TIMEOUT_MS }
+  );
   const first = buildRecognizeResult(modelText);
   // UNREADABLE needs no gate — there is nothing to verify.
   if (first.unreadable) return jsonResponse(200, first);
@@ -145,10 +152,14 @@ async function handleRecognize(request: Request, env: WorkerEnv): Promise<Respon
   // (merged digit groups, dropped operators) and is the reason an expression
   // only ships to the browser when two readings agree or one fixed the other.
   try {
-    const verifyText = await generateContent(env, {
-      parts: verifyParts(body, first.expression),
-      systemInstruction: VERIFY_SYSTEM_INSTRUCTION,
-    });
+    const verifyText = await generateContent(
+      env,
+      {
+        parts: verifyParts(body, first.expression),
+        systemInstruction: VERIFY_SYSTEM_INSTRUCTION,
+      },
+      { timeoutMs: RECOGNIZE_TIMEOUT_MS }
+    );
     if (verifyText.trim().toUpperCase().includes('UNREADABLE')) {
       // Pass 2 could not confirm math in the image: do NOT ship the candidate
       // as if it were verified. Keep it visible but flag it unverified.

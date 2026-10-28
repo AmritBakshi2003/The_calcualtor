@@ -46,6 +46,8 @@ export interface RankedCandidate {
   expression: string;
   /** Best (max) confidence among the candidates that read this expression. */
   confidence: number;
+  /** False when NO source reported a confidence at all (unknown, not 0). */
+  confidenceKnown: boolean;
   /** Distinct sources that read this expression. */
   sources: string[];
   /** Union of the dropped symbols reported by every source reading this. */
@@ -90,6 +92,7 @@ export function rankCandidates(candidates: ConsensusCandidate[]): RankedCandidat
       expression: string;
       sources: Set<string>;
       maxConfidence: number;
+      confidenceKnown: boolean;
       dropped: string[];
       order: number;
     }
@@ -104,18 +107,22 @@ export function rankCandidates(candidates: ConsensusCandidate[]): RankedCandidat
         ? candidate.source.trim()
         : 'unknown';
 
+    const reported =
+      typeof candidate?.confidence === 'number' && Number.isFinite(candidate.confidence);
     let group = groups.get(expression);
     if (!group) {
       group = {
         expression,
         sources: new Set(),
         maxConfidence: 0,
+        confidenceKnown: false,
         dropped: [],
         order: groups.size,
       };
       groups.set(expression, group);
     }
     group.sources.add(source);
+    group.confidenceKnown = group.confidenceKnown || reported;
     group.maxConfidence = Math.max(group.maxConfidence, clampConfidence(candidate.confidence));
     for (const char of candidate.dropped ?? []) {
       if (!group.dropped.includes(char)) group.dropped.push(char);
@@ -132,6 +139,7 @@ export function rankCandidates(candidates: ConsensusCandidate[]): RankedCandidat
     .map((group) => ({
       expression: group.expression,
       confidence: group.maxConfidence,
+      confidenceKnown: group.confidenceKnown,
       sources: [...group.sources],
       dropped: group.dropped,
     }));
@@ -785,10 +793,33 @@ export async function arbitrate(
       return arbiterFallback(decision, stages);
     case 'parse_failed':
       stages.push(`arbiter:${ARBITER_PRIMARY_MODEL}:parse_failed`);
-      break; // matches no candidate -> second opinion
+      break;
     case 'no_match':
       stages.push(`arbiter:${ARBITER_PRIMARY_MODEL}:no_match`);
       break;
+  }
+
+  // Weak candidates (P3): Tesseract produced nothing, or every explicit
+  // confidence is below 25 — the "local readings" are garbage, so a second
+  // opinion against them is worthless. Do NOT spend the 15/day cap on it:
+  // Gemini's own reading IS the answer (unverified — nothing local agreed
+  // with it). With no usable Gemini reading either, the local best ships
+  // unverified as always.
+  const weakCandidates =
+    decision.topCandidates.length === 0 ||
+    decision.topCandidates.every((c) => (c.confidenceKnown ? c.confidence : Infinity) < 25);
+  if (weakCandidates) {
+    stages.push('arbiter:second:skipped:weak_candidates');
+    if (primary.answer) {
+      return {
+        expression: primary.answer.expression,
+        verified: false,
+        sources: [`gemini:${ARBITER_PRIMARY_MODEL}`],
+        alternatives: decision.topCandidates.slice(0, 3).map((c) => c.expression),
+        stages,
+      };
+    }
+    return arbiterFallback(decision, stages);
   }
 
   const secondCount = await readCount(kv, `gemini:second:${dayKey}`);
@@ -838,10 +869,34 @@ export async function arbitrate(
           // Best-effort.
         }
       }
+      // The primary produced a parseable reading: it must NOT be discarded
+      // just because the second model could not run — an empty result is
+      // worse than an honest unverified one (P3).
+      if (primary.answer) {
+        return {
+          expression: primary.answer.expression,
+          verified: false,
+          sources: [`gemini:${ARBITER_PRIMARY_MODEL}`],
+          alternatives: decision.topCandidates.slice(0, 3).map((c) => c.expression),
+          stages,
+        };
+      }
       return arbiterFallback(decision, stages);
     case 'error':
     default:
       stages.push(`arbiter:${ARBITER_SECOND_MODEL}:error`);
+      // Same rule: the primary's own reading survives a second-model
+      // timeout/failure; only when the primary had none does the local best
+      // ship.
+      if (primary.answer) {
+        return {
+          expression: primary.answer.expression,
+          verified: false,
+          sources: [`gemini:${ARBITER_PRIMARY_MODEL}`],
+          alternatives: decision.topCandidates.slice(0, 3).map((c) => c.expression),
+          stages,
+        };
+      }
       return arbiterFallback(decision, stages);
   }
 }

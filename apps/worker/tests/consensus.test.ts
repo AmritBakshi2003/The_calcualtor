@@ -504,6 +504,90 @@ describe('POST /api/scan/consensus', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('empty candidate list: Gemini\'s own reading ships unverified, second-opinion cap untouched (P3 c)', async () => {
+    const fetchMock = makeFetchMock();
+    fetchMock.mockImplementation(async () => geminiJson(arbiterAnswerJson('8-2')));
+    vi.stubGlobal('fetch', fetchMock);
+    const kv = makeKv();
+
+    const response = await post(consensusBody([]), makeEnv({ kv }));
+
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.expression).toBe('8-2');
+    expect(body.verified).toBe(false); // nothing local agreed with it
+    expect(body.stages).toContain('arbiter:second:skipped:weak_candidates');
+    expect(fetchMock).toHaveBeenCalledTimes(1); // primary only
+    expect(kv.map.get(`gemini:second:${pacificDateKey()}`)).toBeUndefined(); // cap NOT spent
+    expect(kv.map.get(`gemini:flashlite:${pacificDateKey()}`)).toBe('1');
+  });
+
+  it('all candidates below confidence 25: same weak rule applies (P3 c)', async () => {
+    const fetchMock = makeFetchMock();
+    fetchMock.mockImplementation(async () => geminiJson(arbiterAnswerJson('8-2')));
+    vi.stubGlobal('fetch', fetchMock);
+    const kv = makeKv();
+
+    const response = await post(
+      consensusBody([
+        { expression: '12+34', source: 'tesseract:grayscale-psm7', confidence: 10 },
+        { expression: '12÷34', source: 'tesseract:grayscale-psm13', confidence: 8 },
+      ]),
+      makeEnv({ kv })
+    );
+
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.expression).toBe('8-2');
+    expect(body.verified).toBe(false);
+    expect(body.stages).toContain('arbiter:second:skipped:weak_candidates');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(kv.map.get(`gemini:second:${pacificDateKey()}`)).toBeUndefined();
+  });
+
+  it('second model rate-limited: the primary\'s own reading ships unverified (P3 a/b)', async () => {
+    // A solid local candidate ('2+3' @ 55) means the weak rule does NOT
+    // apply and the second opinion runs; the second model answers 429.
+    const fetchMock = makeFetchMock();
+    fetchMock.mockImplementationOnce(async () => geminiJson(arbiterAnswerJson('2+5')));
+    fetchMock.mockImplementationOnce(async () => new Response('limited', { status: 429 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const kv = makeKv();
+
+    const response = await post(
+      consensusBody([
+        { expression: '2+3', source: 'tesseract:grayscale-psm7', confidence: 55 },
+      ]),
+      makeEnv({ kv })
+    );
+
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.expression).toBe('2+5'); // the PRIMARY’s own reading, kept
+    expect(body.verified).toBe(false);
+    expect(body.alternatives).toContain('2+3'); // locals stay visible
+    expect(body.stages).toContain(`arbiter:${ARBITER_SECOND_MODEL}:429:busy`);
+    expect(kv.map.get('gemini:busy')).toBe('1');
+  });
+
+  it('second model times out/errors: the primary\'s own reading ships unverified (P3 b)', async () => {
+    const fetchMock = makeFetchMock();
+    fetchMock.mockImplementationOnce(async () => geminiJson(arbiterAnswerJson('2+5')));
+    fetchMock.mockImplementationOnce(async () => {
+      throw new Error('network down'); // surfaces as 'error' inside callArbiterModel
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await post(
+      consensusBody([
+        { expression: '2+3', source: 'tesseract:grayscale-psm7', confidence: 55 },
+      ]),
+      makeEnv({ kv: makeKv() })
+    );
+
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.expression).toBe('2+5');
+    expect(body.verified).toBe(false);
+    expect(body.stages).toContain(`arbiter:${ARBITER_SECOND_MODEL}:error`);
+  });
+
   it('validates the candidate array strictly', async () => {
     expect((await post({ image: PNG_BASE64, mime: 'image/png' }, makeEnv())).status).toBe(400);
     expect((await post({ image: PNG_BASE64, mime: 'image/png', candidates: 'nope' }, makeEnv())).status).toBe(400);

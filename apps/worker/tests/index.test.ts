@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import worker, { scanLimiter } from '../src/index';
+import worker, { limiter, scanLimiter } from '../src/index';
 import type { WorkerEnv } from '../src/env';
 
 const envNoKey = {} as WorkerEnv;
@@ -15,6 +15,7 @@ function geminiJson(text: string): Response {
 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => geminiJson('144/12')));
+  limiter.reset(); // 60 API requests/10 min per IP would trip across tests
   scanLimiter.reset(); // 10 scans/min per IP would trip across tests
 });
 
@@ -226,5 +227,79 @@ describe('POST /api/solve/complex', () => {
 describe('unknown API routes', () => {
   it('404s', async () => {
     expect((await get('/api/nope')).status).toBe(404);
+  });
+});
+
+describe('per-call Gemini timeout (P3 d)', () => {
+  const IMAGE = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+  /** A fetch that hangs until its AbortController fires (fake-timer driven). */
+  function hangFetch() {
+    return vi.fn(
+      (_input: unknown, init?: { signal?: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted.', 'AbortError'))
+          );
+        })
+    );
+  }
+
+  it('/api/scan/recognize aborts at 25 s, not the 20 s default', async () => {
+    vi.useFakeTimers();
+    try {
+      limiter.reset();
+      scanLimiter.reset();
+      vi.stubGlobal('fetch', hangFetch());
+
+      let settled = false;
+      const promise = post('/api/scan/recognize', { image: IMAGE, mime: 'image/png', hint: null });
+      void promise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        }
+      );
+
+      await vi.advanceTimersByTimeAsync(24_999);
+      expect(settled).toBe(false); // the default 20 s budget would have fired by now
+      await vi.advanceTimersByTimeAsync(1);
+      const response = await promise;
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({ error: 'gemini_timeout' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('/api/solve/complex keeps the default 20 s budget', async () => {
+    vi.useFakeTimers();
+    try {
+      limiter.reset();
+      scanLimiter.reset();
+      vi.stubGlobal('fetch', hangFetch());
+
+      let settled = false;
+      const promise = post('/api/solve/complex', { question: 'sqrt(2)^10+log(100)' });
+      void promise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        }
+      );
+
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const response = await promise;
+      expect(response.status).toBe(504);
+      expect(await response.json()).toMatchObject({ error: 'gemini_timeout' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

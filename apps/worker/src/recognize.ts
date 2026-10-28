@@ -16,6 +16,14 @@ export type AllowedImageMime = (typeof ALLOWED_IMAGE_MIMES)[number];
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 const MAX_HINT_CHARS = 500;
 
+/**
+ * Per-call Gemini timeout for /api/scan/recognize ONLY (P3): handwriting
+ * needs the model's full thinking budget, and the 20 s default cut the
+ * verify pass off mid-answer in production. Everything else keeps the
+ * client-facing 20 s default.
+ */
+export const RECOGNIZE_TIMEOUT_MS = 25_000;
+
 export interface RecognizeRequestBody {
   /** Raw base64 (standard alphabet, padding allowed) of the image. */
   image: string;
